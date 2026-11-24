@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useState, type ReactNode } from 'react'
-import type { CacheUsage, SettingsPatch, SettingsResponse } from '../../api/types'
+import type { CacheState, CacheUsage, SettingsPatch, SettingsResponse } from '../../api/types'
 import { AgentError } from '../../api/errors'
 import { formatBytes, formatLimit } from '../../lib/format'
 import { errorText, useAgentContext, useAgentView } from '../../state/context'
@@ -9,7 +9,10 @@ import { Button, Field, InlineError, Switch } from '../../ui/controls'
 
 const GB = 1024 * 1024 * 1024
 const MB = 1024 * 1024
-const cacheSizes = [10, 25, 50, 100, 200, 500].map((g) => g * GB)
+const cacheSizes = [1, 2, 5, 10, 25, 50, 100, 200, 500].map((g) => g * GB)
+
+/** The one-line answer to "is the drive filling up this PC?" (also shown on first run). */
+export const cacheExplainer = 'Files live on the Olsyn drive. This PC keeps only what you opened recently and what is still uploading.'
 const limits = [0, 1, 2, 5, 10, 25, 50, 100].map((m) => m * MB)
 
 const fieldOf = (err: unknown): string | null => (err instanceof AgentError && typeof err.detail.field === 'string' ? err.detail.field : null)
@@ -22,6 +25,8 @@ export function Settings() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saving, setSaving] = useState<string | null>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
+  const [freeing, setFreeing] = useState(false)
+  const [freed, setFreed] = useState<string | null>(null)
   const titleId = useId()
 
   const load = useCallback(() => {
@@ -36,6 +41,26 @@ export function Settings() {
       .catch(() => setCache('unsupported'))
   }, [client])
   useEffect(load, [load, view.generation])
+
+  // The state carries the live split; GET /v1/cache adds the folder and free disk.
+  const live = view.state?.cache
+  const usage: CacheUsage | null | 'unsupported' = cache && cache !== 'unsupported' && live ? { ...cache, ...live } : cache
+
+  const freeUp = async () => {
+    setFreeing(true)
+    setFreed(null)
+    try {
+      const r = await client.freeCache()
+      if (r) {
+        setCache(r.cache)
+        setFreed(r.freed_bytes > 0 ? 'Cleared ' + formatBytes(r.freed_bytes) + '. Those files are still on the drive.' : 'Nothing to clear: what is left is uploading or open.')
+      }
+    } catch (err) {
+      setFreed(errorText(err))
+    } finally {
+      setFreeing(false)
+    }
+  }
 
   // A settings event (from this window or another) is the truth.
   useEffect(() => {
@@ -100,8 +125,21 @@ export function Settings() {
         )}
 
         <SettingsGroup title="Files kept on this PC">
-          <CacheBar usage={cache} cap={s.cache_cap_bytes} />
-          <Field label="Space to use" htmlFor="set-cache" hint="Files you opened recently stay here so they open fast. The oldest are cleared to stay under this size; files not yet sent are never cleared." error={errors.cache_cap_bytes}>
+          <p className="field-hint">{cacheExplainer}</p>
+          <CacheBar usage={usage} cap={s.cache_cap_bytes} />
+          {usage && usage !== 'unsupported' && usage.uploaded_bytes !== undefined && (
+            <div className="field-row">
+              <Button size="s" variant="secondary" pending={freeing} onClick={() => void freeUp()}>
+                Free up space
+              </Button>
+              {freed && (
+                <span className="field-hint" role="status">
+                  {freed}
+                </span>
+              )}
+            </div>
+          )}
+          <Field label="Most space to use" htmlFor="set-cache" hint="Above this, the oldest opened files are cleared first. Files still uploading are never cleared." error={errors.cache_cap_bytes}>
             <select id="set-cache" className="select" value={s.cache_cap_bytes} onChange={(e) => void patch('cache_cap_bytes', { cache_cap_bytes: Number(e.target.value) })}>
               {Array.from(new Set([...cacheSizes, s.cache_cap_bytes]))
                 .sort((a, b) => a - b)
@@ -194,9 +232,49 @@ function LimitField({ id, label, value, onChange, error }: { id: string; label: 
   )
 }
 
-function CacheBar({ usage, cap }: { usage: CacheUsage | null | 'unsupported'; cap: number }) {
+/** The cache's space in three plain parts; older agents (no split) show used and unsent only. */
+function CacheBar({ usage, cap }: { usage: (CacheUsage & Partial<CacheState>) | null | 'unsupported'; cap: number }) {
   if (usage === 'unsupported') return null
   if (!usage) return <div className="cache-bar is-loading" aria-hidden="true" />
+  if (usage.uploaded_bytes === undefined || usage.opened_bytes === undefined) return <OldCacheBar usage={usage} cap={cap} />
+  const scale = Math.max(cap, usage.used_bytes)
+  const parts = [
+    { key: 'unsent', label: 'Waiting to upload', bytes: usage.unsent_bytes },
+    { key: 'uploaded', label: 'Just uploaded, clearing soon', bytes: usage.uploaded_bytes },
+    { key: 'opened', label: 'Recently opened', bytes: usage.opened_bytes },
+  ]
+  return (
+    <div className="cache">
+      <div
+        className="cache-bar is-split"
+        role="meter"
+        aria-label="Space used on this PC"
+        aria-valuemin={0}
+        aria-valuemax={cap}
+        aria-valuenow={usage.used_bytes}
+        aria-valuetext={formatBytes(usage.used_bytes) + ' of ' + formatBytes(cap)}
+      >
+        {parts.map((p) => (p.bytes > 0 ? <span key={p.key} className={'cache-part cache-' + p.key} style={{ width: (p.bytes / scale) * 100 + '%' }} /> : null))}
+      </div>
+      <p className="cache-legend tnum">
+        {parts.map((p) => (
+          <span key={p.key}>
+            <span className={'swatch swatch-' + p.key} aria-hidden="true" />
+            {p.label} {formatBytes(p.bytes)}
+          </span>
+        ))}
+      </p>
+      <p className="cache-legend tnum">
+        <span>
+          {formatBytes(usage.used_bytes)} of {formatBytes(cap)} on this PC
+        </span>
+        <span className="muted">{formatBytes(usage.disk_free_bytes)} free on the disk</span>
+      </p>
+    </div>
+  )
+}
+
+function OldCacheBar({ usage, cap }: { usage: CacheUsage; cap: number }) {
   const used = Math.min(1, usage.used_bytes / cap)
   const unsent = Math.min(used, usage.unsent_bytes / cap)
   return (

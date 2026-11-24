@@ -1,7 +1,7 @@
 // The tray popover: what is happening in one line, what is moving, what just
 // finished, and the four things people reach for.
 
-import type { Transfer } from '../../api/types'
+import type { State, Transfer } from '../../api/types'
 import { formatBytes, formatProgress, formatSpeed, formatTimeLeftShort, formatWhen } from '../../lib/format'
 import { interpolatedBytes, useNow } from '../../lib/useNow'
 import { statusLine } from '../../state/derive'
@@ -102,6 +102,8 @@ export function Popover() {
         </section>
       )}
 
+      {state?.account && <CacheLine cache={state.cache} onOpen={() => open('settings')} />}
+
       {error && <p className="field-error pop-error" role="alert">{error.message}</p>}
 
       <footer className="pop-actions">
@@ -128,6 +130,20 @@ export function Popover() {
         </button>
       </footer>
     </main>
+  )
+}
+
+const GiB = 1024 * 1024 * 1024
+
+/** One quiet line once the cache holds more than 1 GiB: how much, and why. */
+export function CacheLine({ cache, onOpen }: { cache: State['cache']; onOpen: () => void }) {
+  if (!cache || cache.used_bytes <= GiB) return null
+  const why =
+    cache.unsent_bytes > 0 ? formatBytes(cache.unsent_bytes) + ' still uploading' : cache.uploaded_bytes > 0 ? 'uploaded files clear soon' : 'recently opened files'
+  return (
+    <button type="button" className="pop-cache" onClick={onOpen}>
+      {formatBytes(cache.used_bytes) + ' kept on this PC: ' + why + '.'}
+    </button>
   )
 }
 

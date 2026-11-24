@@ -194,6 +194,8 @@ func (f *fakeFS) SetCacheCap(int64) {}
 
 func (f *fakeFS) SetCacheRelease(settings.CacheRelease) {}
 
+func (f *fakeFS) FreeCache(ctx context.Context) (CacheFreed, error) { return CacheFreed{}, nil }
+
 func (f *fakeFS) SetBandwidth(b settings.Bandwidth) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

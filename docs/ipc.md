@@ -103,7 +103,9 @@ other keys are extra detail named per code below.
   "driver": {"state": "ok", "name": "winfsp", "version": "2.2.25089", "min_version": "2.0"},
   "started_at": "2026-11-24T02:59:58.000Z",
   "first_run": false,
-  "unsent": {"files": 16, "bytes": 610271232, "held": 2}
+  "unsent": {"files": 16, "bytes": 610271232, "held": 2},
+  "cache": {"used_bytes": 3233808384, "cap_bytes": 10737418240, "unsent_bytes": 610271232,
+            "uploaded_bytes": 1395864371, "opened_bytes": 1227672781}
 }
 ```
 
@@ -137,6 +139,10 @@ other keys are extra detail named per code below.
 - `unsent`: changes not yet on the drive: `files` queued uploads, `held` held items, `bytes` of both. Zero while
   signed out (unsent data kept by a sign-out is counted again at the next sign-in to the same account).
 - Agents before 1.1 send neither `first_run` nor `unsent`; treat absent as `false` and zero.
+- `cache`: how much of this PC the drive's cache uses, split three ways (the same figures as `GET /v1/cache`):
+  `unsent_bytes` waiting to upload (on this PC only), `uploaded_bytes` sent and cleared once the drive has
+  confirmed it, `opened_bytes` drive files opened here and kept so they open fast. Refreshed at most once a
+  second. Absent from agents before 1.2.
 
 ### SignIn
 
@@ -245,7 +251,8 @@ network provider order (`dokany`); they coexist with WinFsp and are only reporte
 {
   "drive_letter": "W:",
   "cache_dir": "C:\\Users\\ada\\AppData\\Local\\Olsyn Drive\\cache",
-  "cache_cap_bytes": 53687091200,
+  "cache_cap_bytes": 10737418240,
+  "cache_release": {"after_upload_seconds": 300, "keep_opened_seconds": 1800},
   "bandwidth": {"up_bps": 0, "down_bps": 0},
   "start_at_login": true,
   "update_channel": "stable",
@@ -256,6 +263,16 @@ network provider order (`dokany`); they coexist with WinFsp and are only reporte
 ```
 
 Bandwidth `0` = unlimited. `device_name` `""` = the OS computer name.
+
+`cache_cap_bytes` defaults to 10% of the disk's free space, at most 10 GiB and at least 1 GiB. A settings file
+written before version 2 whose cap was the old computed default (20% of free space, up to 50 GiB) moves to the new
+default once; a size the person chose stays.
+
+`cache_release` (agent 1.2): an uploaded file's content is cleared from this PC `after_upload_seconds` after the
+drive has confirmed it (checksum `verified`, or `claimed` and verified later; default 300) unless it is open, was
+read in the last `keep_opened_seconds` (default 1800) or is in a folder kept offline. Uploads the drive never
+confirms are cleared only when the cache is over its cap, and never while they are the only copy. 0 = at once;
+both 0..604800.
 
 ### Notification
 
@@ -360,7 +377,7 @@ the nearest below it (`""` when none is free, or off Windows). `PATCH` of a held
 
 `PATCH /v1/settings` body: a JSON merge patch (RFC 7396) of `Settings`, e.g. `{"bandwidth": {"up_bps": 5000000}}`
 → 200 same shape as GET. Validated as a whole; 422 `invalid_setting` with `field` (dotted) and nothing saved.
-Effects: bandwidth and notifications at once; `start_at_login` updates the OS entry at once; `drive_letter`
+Effects: bandwidth, notifications and `cache_release` at once; `start_at_login` updates the OS entry at once; `drive_letter`
 remounts when mounted (409 `busy` while files are open on the drive); `update_channel` triggers a check;
 `cache_dir`, `server_url` and `device_name` apply at the next start and are listed in `pending_restart`
 (`server_url` only while signed out, else 409 `already_signed_in`). A `settings` event follows every change.
@@ -413,9 +430,17 @@ web app (path optional). `folder`: a local folder (`path` absolute; 404 `local_n
 `olsyn-drive://show/<route>` link; a running app takes the link and shows the route. Notification actions use this
 target. 409 `no_ui` from a build without the desktop app (the command-line-only builds).
 
-`GET /v1/cache` → 200 `{"dir": "C:\\Users\\ada\\AppData\\Local\\Olsyn Drive\\Cache", "used_bytes": 19756849561,
-"cap_bytes": 53687091200, "unsent_bytes": 610271232, "unsent_files": 18, "disk_free_bytes": 227633266688}`.
-`used_bytes` counts cached content including unsent; `unsent_bytes` is content on this PC only. 409 `not_signed_in`.
+`GET /v1/cache` → 200 `{"dir": "C:\\Users\\ada\\AppData\\Local\\Olsyn Drive\\Cache", "used_bytes": 3233808384,
+"cap_bytes": 10737418240, "unsent_bytes": 610271232, "unsent_files": 18, "uploaded_bytes": 1395864371,
+"opened_bytes": 1227672781, "disk_free_bytes": 227633266688}`.
+`used_bytes` counts cached content including unsent; `unsent_bytes` is content on this PC only; `uploaded_bytes`
+was sent and is cleared once the drive has confirmed it; `opened_bytes` is everything else (opened files, and
+uploads the drive could not confirm). The last two are absent before agent 1.2. 409 `not_signed_in`.
+
+`POST /v1/cache/free` (agent 1.2) → 200 `{"freed_files": 37, "freed_bytes": 2623537152, "cache": <GET /v1/cache>}`.
+Clears every cached file that can go now: not open, not waiting to upload, not an upload the drive has yet to
+confirm. The files stay on the drive and are fetched again when opened. A `state` event follows. 409
+`not_signed_in`.
 
 `GET /v1/drive/folders?parent=/Projects` (or `parent_id=`; default the top of the drive; `cursor=` for more) → 200
 `{"parent": "/Projects", "parent_id": "…", "can_write": true, "folders": [{"id": "…", "name": "Tower", "path": "/Projects/Tower",

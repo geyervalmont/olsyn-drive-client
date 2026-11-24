@@ -62,12 +62,34 @@ const (
 
 // CacheUsage is GET /v1/cache.
 type CacheUsage struct {
-	Dir           string `json:"dir"`
-	UsedBytes     int64  `json:"used_bytes"`
-	CapBytes      int64  `json:"cap_bytes"`
-	UnsentBytes   int64  `json:"unsent_bytes"`
-	UnsentFiles   int    `json:"unsent_files"`
-	DiskFreeBytes int64  `json:"disk_free_bytes"`
+	Dir         string `json:"dir"`
+	UsedBytes   int64  `json:"used_bytes"`
+	CapBytes    int64  `json:"cap_bytes"`
+	UnsentBytes int64  `json:"unsent_bytes"`
+	UnsentFiles int    `json:"unsent_files"`
+	// UploadedBytes: sent from this PC, cleared once the drive has
+	// confirmed it (after a short grace period).
+	UploadedBytes int64 `json:"uploaded_bytes"`
+	// OpenedBytes: drive files opened on this PC, kept so they open fast;
+	// the oldest go when the cache is over its cap.
+	OpenedBytes   int64 `json:"opened_bytes"`
+	DiskFreeBytes int64 `json:"disk_free_bytes"`
+}
+
+// CacheState is the cache part of State: the same split as CacheUsage.
+type CacheState struct {
+	UsedBytes     int64 `json:"used_bytes"`
+	CapBytes      int64 `json:"cap_bytes"`
+	UnsentBytes   int64 `json:"unsent_bytes"`
+	UploadedBytes int64 `json:"uploaded_bytes"`
+	OpenedBytes   int64 `json:"opened_bytes"`
+}
+
+// CacheFreed is POST /v1/cache/free.
+type CacheFreed struct {
+	Files int        `json:"freed_files"`
+	Bytes int64      `json:"freed_bytes"`
+	Cache CacheUsage `json:"cache"`
 }
 
 // DriveFolder is one entry of GET /v1/drive/folders.
@@ -186,10 +208,19 @@ func (a *Agent) hCache(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, err)
 		return
 	}
-	u, err := a.opts.FS.CacheUsage(r.Context())
+	u, err := a.cacheUsage(r.Context())
 	if err != nil {
 		a.fail(w, err)
 		return
+	}
+	writeJSON(w, 200, u)
+}
+
+// cacheUsage is GET /v1/cache's answer.
+func (a *Agent) cacheUsage(ctx context.Context) (CacheUsage, error) {
+	u, err := a.opts.FS.CacheUsage(ctx)
+	if err != nil {
+		return CacheUsage{}, err
 	}
 	a.mu.Lock()
 	u.CapBytes = a.settings.CacheCapBytes
@@ -202,7 +233,28 @@ func (a *Agent) hCache(w http.ResponseWriter, r *http.Request) {
 	if free, ferr := a.opts.System.FreeDiskBytes(dir); ferr == nil {
 		u.DiskFreeBytes = int64(free)
 	}
-	writeJSON(w, 200, u)
+	return u, nil
+}
+
+func (a *Agent) hCacheFree(w http.ResponseWriter, r *http.Request) {
+	if err := a.requireRunning(); err != nil {
+		a.fail(w, err)
+		return
+	}
+	freed, err := a.opts.FS.FreeCache(r.Context())
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
+	u, err := a.cacheUsage(r.Context())
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
+	freed.Cache = u
+	a.log.Info("cache freed on request", "files", freed.Files, "bytes", freed.Bytes)
+	a.emitState()
+	writeJSON(w, 200, freed)
 }
 
 func (a *Agent) hDriveFolders(w http.ResponseWriter, r *http.Request) {

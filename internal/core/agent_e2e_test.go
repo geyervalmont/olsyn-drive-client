@@ -76,7 +76,7 @@ func start(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	c, err := core.New(core.Options{StateDir: paths.State, PCName: "TestPC", HTTPClient: http.DefaultClient,
-		PollInterval: 200 * time.Millisecond, Backoff: fast, DisableStream: true})
+		PollInterval: 200 * time.Millisecond, Backoff: fast, DisableStream: true, ReleaseInterval: 100 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}

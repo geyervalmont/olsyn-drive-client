@@ -117,6 +117,8 @@ type FSStatus struct {
 	CacheFull    bool
 	// Unsent counts queued and held changes (cheap: kept up to date).
 	Unsent Unsent
+	// Cache is how the cache's space is used.
+	Cache CacheState
 }
 
 // FSEvent is one change from the file system core. Exactly one field is set.
@@ -161,6 +163,9 @@ type FileSystem interface {
 	// CacheUsage reports the cache's size and unsent bytes (Dir, CapBytes
 	// and DiskFreeBytes are filled in by the agent).
 	CacheUsage(ctx context.Context) (CacheUsage, error)
+	// FreeCache releases every cached file that can go now: not open, not
+	// unsent, not an upload the drive has yet to confirm.
+	FreeCache(ctx context.Context) (CacheFreed, error)
 	// DriveFolders lists the folders in a drive folder, given by path or id.
 	DriveFolders(ctx context.Context, parentPath, parentID, cursor string) (DriveFolders, error)
 	SetBandwidth(b settings.Bandwidth)

@@ -7,6 +7,7 @@ import type {
   ActivityPage,
   AgentEventName,
   Batch,
+  CacheFreed,
   CacheUsage,
   Driver,
   DriveFolderList,
@@ -175,6 +176,10 @@ export class AgentClient {
   // Added in agent 1.1 (docs/ipc.md v1, additive). Each degrades to null on 404 from an older agent so the UI can hide the feature.
   async cache(): Promise<CacheUsage | null> {
     return this.optional(() => this.call<CacheUsage>('GET', '/v1/cache'))
+  }
+  /** Clears every cached file the drive has (agent 1.2); null from an older agent. */
+  async freeCache(): Promise<CacheFreed | null> {
+    return this.optional(() => this.call<CacheFreed>('POST', '/v1/cache/free', {}))
   }
   async driveFolders(parent: string): Promise<DriveFolderList | null> {
     return this.optional(() => this.call<DriveFolderList>('GET', '/v1/drive/folders?parent=' + encodeURIComponent(parent)))

@@ -70,6 +70,7 @@ func (a *Agent) handler() http.Handler {
 	route("/v1/open", post(a.hOpen))
 	route("/v1/quit", post(a.hQuit))
 	route("/v1/cache", get(a.hCache))
+	route("/v1/cache/free", post(a.hCacheFree))
 	route("/v1/drive/folders", get(a.hDriveFolders))
 	route("/v1/activity", get(a.hActivity))
 	route("/v1/batches", get(a.hBatches))

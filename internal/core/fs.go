@@ -521,9 +521,28 @@ func (f *FS) Status() agent.FSStatus {
 	if r.vfs.State() == vfs.StateOffline {
 		st.Connectivity = agent.Offline
 	}
-	cs := r.cache.Stats()
-	st.CacheFull = cs.Cap > 0 && cs.Unsent >= cs.Cap
+	cu := f.cacheState(r)
+	st.Cache = cu
+	st.CacheFull = cu.CapBytes > 0 && cu.UnsentBytes >= cu.CapBytes
 	return st
+}
+
+// cacheState is the cache's split for State, kept for a moment like the
+// summary (Status is asked for on every event).
+func (f *FS) cacheState(r *session) agent.CacheState {
+	f.mu.Lock()
+	if time.Since(f.sum.cacheAt) < time.Second {
+		c := f.sum.cache
+		f.mu.Unlock()
+		return c
+	}
+	f.mu.Unlock()
+	u := r.vfs.CacheUsage()
+	c := agent.CacheState{UsedBytes: u.Used, CapBytes: u.Cap, UnsentBytes: u.Unsent, UploadedBytes: u.Uploaded, OpenedBytes: u.Opened}
+	f.mu.Lock()
+	f.sum.cache, f.sum.cacheAt = c, time.Now()
+	f.mu.Unlock()
+	return c
 }
 
 // summaryCache keeps the summary for a moment: the agent asks on every
@@ -532,6 +551,9 @@ type summaryCache struct {
 	at     time.Time
 	val    agent.Summary
 	unsent agent.Unsent
+	// cache: the cache's split, at cacheAt
+	cacheAt time.Time
+	cache   agent.CacheState
 }
 
 func (f *FS) summary(r *session) (agent.Summary, agent.Unsent) {
@@ -584,7 +606,7 @@ func (f *FS) summary(r *session) (agent.Summary, agent.Unsent) {
 		s.ETASeconds = &eta
 	}
 	f.mu.Lock()
-	f.sum = summaryCache{at: time.Now(), val: s, unsent: u}
+	f.sum.at, f.sum.val, f.sum.unsent = time.Now(), s, u
 	f.mu.Unlock()
 	return s, u
 }

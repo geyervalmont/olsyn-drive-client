@@ -18,12 +18,15 @@ import (
 )
 
 const (
-	// CurrentVersion is the version this code writes.
-	CurrentVersion = 1
+	// CurrentVersion is the version this code writes. Version 2 changed the
+	// default cache cap (see Load).
+	CurrentVersion = 2
 	// GiB is 2^30 bytes.
 	GiB int64 = 1 << 30
 	// MaxDefaultCacheCap caps the default cache size.
-	MaxDefaultCacheCap = 50 * GiB
+	MaxDefaultCacheCap = 10 * GiB
+	// maxDefaultCacheCapV1 was the cap of version 1's default.
+	maxDefaultCacheCapV1 = 50 * GiB
 	// MinCacheCap is the smallest cache allowed.
 	MinCacheCap = 1 * GiB
 	// DefaultServerURL is the public product URL; any drive server can be configured.
@@ -86,13 +89,34 @@ type Env struct {
 	FreeDiskBytes uint64 // free space where the cache goes
 }
 
-// DefaultCacheCap is min(50 GiB, 20% of free disk), but never below MinCacheCap.
+// DefaultCacheCap is min(10 GiB, 10% of free disk), but never below
+// MinCacheCap. The cache mostly holds files still uploading and files
+// opened recently (uploads leave soon after the drive confirms them), so
+// it need not be large.
 func DefaultCacheCap(free uint64) int64 {
-	c := int64(free / 5)
-	if free/5 > uint64(MaxDefaultCacheCap) {
+	c := int64(free / 10)
+	if free/10 > uint64(MaxDefaultCacheCap) {
 		c = MaxDefaultCacheCap
 	}
 	return max(c, MinCacheCap)
+}
+
+// defaultCacheCapV1 is version 1's default: min(50 GiB, 20% of free disk).
+func defaultCacheCapV1(free uint64) int64 {
+	c := int64(free / 5)
+	if free/5 > uint64(maxDefaultCacheCapV1) {
+		c = maxDefaultCacheCapV1
+	}
+	return max(c, MinCacheCap)
+}
+
+// wasDefaultCapV1 reports a version 1 cache cap that was the computed
+// default rather than the person's choice: it equals the old formula for
+// today's free space, or it is not a whole number of GiB (the free space
+// has changed since it was computed, and every size the person can choose
+// is a whole number of GiB).
+func wasDefaultCapV1(v int64, free uint64) bool {
+	return v == defaultCacheCapV1(free) || v%GiB != 0
 }
 
 // Defaults returns the settings of a fresh install.
@@ -199,9 +223,11 @@ type fileFormat struct {
 	Settings
 }
 
-// Load reads the settings file. A missing file gives the defaults and
-// created=true. Fields missing from the file keep their defaults.
-func Load(path string, env Env) (s Settings, created bool, err error) {
+// Load reads the settings file. A missing file gives the defaults. Fields
+// missing from the file keep their defaults. save is true when the caller
+// should write the result: the file is missing, or an older version wrote
+// it (its values were migrated).
+func Load(path string, env Env) (s Settings, save bool, err error) {
 	s = Defaults(env)
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -219,16 +245,21 @@ func Load(path string, env Env) (s Settings, created bool, err error) {
 	if head.Version > CurrentVersion {
 		return s, false, fmt.Errorf("%s has version %d: %w", path, head.Version, ErrNewerVersion)
 	}
-	// Version 0 (no field) and 1 share a format; later versions migrate here.
+	// Versions 0 (no field), 1 and 2 share a format; values migrate here.
 	f := fileFormat{Settings: s}
 	if err := json.Unmarshal(data, &f); err != nil {
 		return s, false, fmt.Errorf("parse settings %s: %w", path, err)
+	}
+	if head.Version < 2 && wasDefaultCapV1(f.Settings.CacheCapBytes, env.FreeDiskBytes) {
+		// the old default (up to 50 GiB) gives way to the new one; a size
+		// the person chose stays
+		f.Settings.CacheCapBytes = DefaultCacheCap(env.FreeDiskBytes)
 	}
 	f.Settings.DriveLetter = NormalizeDriveLetter(f.Settings.DriveLetter)
 	if err := f.Settings.Validate(); err != nil {
 		return s, false, fmt.Errorf("settings %s: %w", path, err)
 	}
-	return f.Settings, false, nil
+	return f.Settings, head.Version < CurrentVersion, nil
 }
 
 // Save validates s and writes it atomically: a temporary file in the same

@@ -191,13 +191,13 @@ func New(opts Options) (*Agent, error) {
 	if free, err := opts.System.FreeDiskBytes(opts.Paths.Cache); err == nil {
 		env.FreeDiskBytes = free
 	}
-	s, created, err := settings.Load(a.settingsPath, env)
+	s, save, err := settings.Load(a.settingsPath, env)
 	if err != nil {
 		return nil, fmt.Errorf("load settings: %w", err)
 	}
-	if created {
+	if save { // first start, or migrated from an older version
 		if err := settings.Save(a.settingsPath, s); err != nil {
-			return nil, fmt.Errorf("save first settings: %w", err)
+			return nil, fmt.Errorf("save settings: %w", err)
 		}
 	}
 	if opts.Server != "" {
@@ -338,6 +338,10 @@ func (a *Agent) stateLocked() State {
 		StartedAt:   a.start,
 		FirstRun:    a.account == nil && !a.linkedOnce,
 		Unsent:      fs.Unsent,
+		Cache:       fs.Cache,
+	}
+	if st.Cache.CapBytes == 0 {
+		st.Cache.CapBytes = a.settings.CacheCapBytes
 	}
 	st.Issues = a.issuesLocked(fs)
 	st.Connection = a.connectionLocked(fs, st.Issues)

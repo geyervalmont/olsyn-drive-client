@@ -17,8 +17,8 @@ func (f *FS) CacheUsage(ctx context.Context) (agent.CacheUsage, error) {
 	if r == nil {
 		return agent.CacheUsage{}, nil
 	}
-	cs := r.cache.Stats()
-	u := agent.CacheUsage{UsedBytes: cs.Used, CapBytes: cs.Cap}
+	cu := r.vfs.CacheUsage()
+	u := agent.CacheUsage{UsedBytes: cu.Used, CapBytes: cu.Cap, UnsentBytes: cu.Unsent, UploadedBytes: cu.Uploaded, OpenedBytes: cu.Opened}
 	for _, q := range r.vfs.Queued() {
 		if q.Kind == journal.OpUpload {
 			u.UnsentFiles++
@@ -27,8 +27,18 @@ func (f *FS) CacheUsage(ctx context.Context) (agent.CacheUsage, error) {
 	for range r.vfs.Held() {
 		u.UnsentFiles++
 	}
-	u.UnsentBytes = cs.Unsent
 	return u, nil
+}
+
+// FreeCache releases everything the cache can give up now.
+func (f *FS) FreeCache(ctx context.Context) (agent.CacheFreed, error) {
+	r := f.current()
+	if r == nil {
+		return agent.CacheFreed{}, nil
+	}
+	files, bytes := r.vfs.FreeCache()
+	f.invalidate()
+	return agent.CacheFreed{Files: files, Bytes: bytes}, nil
 }
 
 // folderListMax bounds one page of folders; a folder of thousands of files

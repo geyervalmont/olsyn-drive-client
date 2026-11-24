@@ -118,6 +118,9 @@ export class MockAgent {
   /** Failures left before the agent "starts" (unreachable scenario). */
   private downAttempts = 0
   private snapshotDelay = 0
+  // the cache's split (bytes): just uploaded, and opened files
+  private cacheUploaded = Math.round(2.1 * GB)
+  private cacheOpened = Math.round(1.3 * GB)
 
   constructor(options: MockAgentOptions) {
     this.scenario = options.scenario
@@ -129,7 +132,8 @@ export class MockAgent {
     this.settings = {
       drive_letter: 'W:',
       cache_dir: localPath('C:', 'Users', 'ada', 'AppData', 'Local', 'Olsyn Drive', 'cache'),
-      cache_cap_bytes: 50 * GB,
+      cache_cap_bytes: 10 * GB,
+      cache_release: { after_upload_seconds: 300, keep_opened_seconds: 1800 },
       bandwidth: { up_bps: 0, down_bps: 0 },
       start_at_login: true,
       update_channel: 'stable',
@@ -555,7 +559,15 @@ export class MockAgent {
       started_at: this.startedAt,
       first_run: this.account === null && this.scenario === 'first-run',
       unsent: { files: this.queue.length + this.held.length, bytes: Math.max(0, this.workTotal - this.workDone), held: this.held.length },
+      cache: this.cacheState(),
     }
+  }
+
+  private cacheState() {
+    const unsent = this.account ? Math.max(0, this.workTotal - this.workDone) : 0
+    const uploaded = this.account ? this.cacheUploaded : 0
+    const opened = this.account ? this.cacheOpened : 0
+    return { used_bytes: unsent + uploaded + opened, cap_bytes: this.settings.cache_cap_bytes, unsent_bytes: unsent, uploaded_bytes: uploaded, opened_bytes: opened }
   }
 
   state(): State {
@@ -742,14 +754,15 @@ export class MockAgent {
         this.dropSubscribers('The agent quit.')
         return ok({ quitting: true }, 202)
       case 'GET /v1/cache':
-        return ok({
-          dir: localPath('C:', 'Users', 'ada', 'AppData', 'Local', 'Olsyn Drive', 'Cache'),
-          used_bytes: Math.round(18.4 * GB),
-          cap_bytes: this.settings.cache_cap_bytes,
-          unsent_bytes: Math.max(0, this.workTotal - this.workDone),
-          unsent_files: this.queue.length + this.held.length,
-          disk_free_bytes: 212 * GB,
-        })
+        if (!this.account) return err(409, 'not_signed_in', 'Sign in first.')
+        return ok(this.cacheUsage())
+      case 'POST /v1/cache/free': {
+        if (!this.account) return err(409, 'not_signed_in', 'Sign in first.')
+        const freed = this.cacheUploaded + this.cacheOpened
+        this.cacheUploaded = 0
+        this.cacheOpened = 0
+        return ok({ freed_files: freed > 0 ? 37 : 0, freed_bytes: freed, cache: this.cacheUsage() })
+      }
       case 'GET /v1/drive/folders':
         return this.driveFolders(q.get('parent') || '/')
       case 'GET /v1/activity': {
@@ -961,6 +974,16 @@ export class MockAgent {
     })
   }
 
+  private cacheUsage() {
+    const c = this.cacheState()
+    return {
+      dir: localPath('C:', 'Users', 'ada', 'AppData', 'Local', 'Olsyn Drive', 'Cache'),
+      ...c,
+      unsent_files: this.queue.length + this.held.length,
+      disk_free_bytes: 212 * GB,
+    }
+  }
+
   private settingsResponse(): SettingsResponse {
     const inUse = { ...this.lettersInUse }
     const ours = this.mount.state === 'mounted' ? this.mount.letter : null
@@ -969,7 +992,7 @@ export class MockAgent {
     const letters = all.filter((l) => !inUse[l] || l === ours).sort()
     return {
       settings: this.settings,
-      defaults: { ...this.settings, drive_letter: 'W:', cache_cap_bytes: 50 * GB, bandwidth: { up_bps: 0, down_bps: 0 }, start_at_login: true, update_channel: 'stable' },
+      defaults: { ...this.settings, drive_letter: 'W:', cache_cap_bytes: 10 * GB, bandwidth: { up_bps: 0, down_bps: 0 }, start_at_login: true, update_channel: 'stable' },
       choices: { drive_letters: letters, letters_in_use: inUse, suggested_letter: suggestLetter(this.settings.drive_letter, inUse), update_channels: ['stable', 'beta'] },
       pending_restart: [],
     }
@@ -986,7 +1009,7 @@ export class MockAgent {
       }
     }
     if (!/^[D-Z]:$/.test(next.drive_letter)) return err(422, 'invalid_setting', 'Pick a letter from the list.', { field: 'drive_letter' })
-    if (next.cache_cap_bytes < 2 * GB) return err(422, 'invalid_setting', 'The cache needs at least 2 GB.', { field: 'cache_cap_bytes' })
+    if (next.cache_cap_bytes < GB) return err(422, 'invalid_setting', 'The cache needs at least 1 GB.', { field: 'cache_cap_bytes' })
     if (next.bandwidth.up_bps < 0 || next.bandwidth.down_bps < 0) return err(422, 'invalid_setting', 'A limit cannot be below zero.', { field: 'bandwidth' })
     const letterChanged = next.drive_letter !== this.settings.drive_letter
     const pending: string[] = []

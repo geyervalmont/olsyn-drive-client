@@ -241,6 +241,8 @@ type State struct {
 	FirstRun bool `json:"first_run"`
 	// Unsent is what has not reached the drive yet (queued and held).
 	Unsent Unsent `json:"unsent"`
+	// Cache is how much of this PC the drive's cache uses, and for what.
+	Cache CacheState `json:"cache"`
 }
 
 // OpenAction is a POST /v1/open body.

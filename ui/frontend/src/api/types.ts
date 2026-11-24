@@ -144,6 +144,20 @@ export interface State {
   first_run?: boolean
   /** What has not reached the drive yet. Absent from agents older than 1.1. */
   unsent?: Unsent
+  /** How much of this PC the cache uses, and for what. Absent from agents older than 1.2. */
+  cache?: CacheState
+}
+
+/** The cache part of State. */
+export interface CacheState {
+  used_bytes: number
+  cap_bytes: number
+  /** Waiting to upload: on this PC only. */
+  unsent_bytes: number
+  /** Just uploaded: cleared once the drive has confirmed it. */
+  uploaded_bytes: number
+  /** Drive files opened on this PC, kept so they open fast. */
+  opened_bytes: number
 }
 
 export interface Unsent {
@@ -210,6 +224,8 @@ export interface Settings {
   drive_letter: string
   cache_dir: string
   cache_cap_bytes: number
+  /** How soon an uploaded file stops taking space here. Absent from agents older than 1.2. */
+  cache_release?: { after_upload_seconds: number; keep_opened_seconds: number }
   bandwidth: { up_bps: number; down_bps: number }
   start_at_login: boolean
   update_channel: string
@@ -282,7 +298,18 @@ export interface CacheUsage {
   cap_bytes: number
   unsent_bytes: number
   unsent_files: number
+  /** Absent from agents older than 1.2. */
+  uploaded_bytes?: number
+  /** Absent from agents older than 1.2. */
+  opened_bytes?: number
   disk_free_bytes: number
+}
+
+/** POST /v1/cache/free. */
+export interface CacheFreed {
+  freed_files: number
+  freed_bytes: number
+  cache: CacheUsage
 }
 
 export type FolderWhy = '' | 'read_only' | 'managed' | 'sealed'
