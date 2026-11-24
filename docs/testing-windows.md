@@ -213,7 +213,8 @@ in; it prints the commands below with that address and key.
 
 1. In a normal PowerShell 5.1 window: `$env:OLSYN_DRIVE_DEV_RELEASE_KEYS = "dev=<key it printed>"`, then
    `irm http://127.0.0.1:8787/install.ps1 | iex`. Expect: "Looking for the latest", the download line, "Checked: size
-   and SHA-256 match", "Note: this build is not signed", "Release manifest verified", "installed", the app opens
+   and SHA-256 match", "Note: this build is not signed", then the pre-release wizard (steps 1-3, see 9 below;
+   answer Y or C), "Checked again: SHA-256 unchanged", "Release manifest verified", "installed", the app opens
    on its Welcome screen. `$LASTEXITCODE` is 0 and the window stays open. No folder `olsyn-drive-install-*` is left in
    `%TEMP%`.
 2. Run it again: "already installed" (exit 0), or with `-Force` a reinstall that stops and restarts the running copy.
@@ -223,6 +224,21 @@ in; it prints the commands below with that address and key.
 5. Change the exe on disk after starting the server: "does not match the SHA-256", exit 1, nothing installed.
 6. Repeat 1 in PowerShell 7 (`pwsh`), and with `install.cmd` downloaded from `http://127.0.0.1:8787/install.cmd`
    (from cmd.exe; `echo %ERRORLEVEL%` is 0).
-7. From an administrator PowerShell window: refused, exit 1, with the reason.
+7. From an administrator PowerShell window with a signed build: refused, exit 1, with the reason. With an unsigned
+   build the wizard runs instead (9), and the app is opened with normal rights (Task Manager > Details, "Elevated"
+   column: No).
 8. `powershell -File scripts\install\install.ps1 -Server http://127.0.0.1:9` (nothing listening): "could not read …",
    exit 1.
+9. Pre-release wizard, normal window: `powershell -File scripts\install\install.ps1 -PreRelease -Installer olsyn-drive.exe`.
+   Expect step 1 (two lines), step 2 creates `%LOCALAPPDATA%\Programs\Olsyn Drive`, Ctrl+V pastes its path, Windows
+   Security opens on Exclusions; after Enter, step 3 says it cannot read the list and asks Y/N; N offers R/C/Q, Q
+   ends with exit 3 and nothing installed. With Y: the file's size and SHA-256 are printed, it installs, the app
+   opens, and steps 4-5 print the Protection history and "Remove later" text. Nothing in Windows Security changed
+   unless you changed it.
+10. The same from an administrator window: without the exclusion, step 3 says Windows Security does not list the
+    folder; add it (also try with a trailing `\` or other letter case) and R: "Checked: Windows Security lists the
+    Olsyn Drive folder". An exclusion of `%LOCALAPPDATA%\Programs` instead: "a larger folder ... so this works".
+11. `-Sha256 <wrong 64 hex digits>`: refused, exit 1. `-DryRun`: walks steps 1-5, creates nothing, downloads
+    nothing, exit 0. `-SelfTest`: "Self-test passed", exit 0 (also in `pwsh`).
+12. With another antivirus active (or Defender turned off by policy): step 2 names it and asks you to allow the
+    folder there; it does not open Windows Security.

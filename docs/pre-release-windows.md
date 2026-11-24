@@ -4,6 +4,40 @@ This is an early, **unsigned** test version of Olsyn Drive. It is not signed wit
 yet, so Windows does not know who made it and may warn you or remove it. Nothing is wrong with your PC and
 nothing is lost if that happens. The signed release will not need any of the steps below.
 
+## The easy way: the install wizard
+
+A short guided installer runs in PowerShell. It explains each step, creates Olsyn Drive's program folder, copies
+its path for you, opens Windows Security on the right page, checks your work, installs Olsyn Drive and opens it.
+It never changes Windows Security itself: you make the one change, by hand, and it shows you where.
+
+**For now (test builds sent to you directly).** Download the Olsyn Drive file you were sent (`olsyn-drive.exe`)
+and `install.ps1`, both into your Downloads folder. Then:
+
+1. Open the Start menu, type **PowerShell**, right-click **Windows PowerShell** and choose **Run as administrator**,
+   then **Yes**. (Administrator lets the wizard check the Windows Security step for you. Without it, the wizard
+   works too and asks you to confirm instead.)
+2. Paste this line and press Enter:
+
+       & ([scriptblock]::Create((Get-Content -Raw "$HOME\Downloads\install.ps1"))) -PreRelease -Installer "$HOME\Downloads\olsyn-drive.exe"
+
+   Or, without downloading `install.ps1`:
+
+       & ([scriptblock]::Create((irm https://drive.olsyn.com/install.ps1))) -PreRelease -Installer "$HOME\Downloads\olsyn-drive.exe"
+
+   If you were sent a SHA-256 with the file, add `-Sha256 <that value>` at the end and the wizard refuses a file
+   that does not match; without it, it prints the file's SHA-256 so you can compare it yourself.
+3. Follow the five steps on screen. Type Q at a question to stop without installing anything.
+
+**Once releases are published on the drive**, the same wizard starts by itself for a test build. Open PowerShell
+(as above) and run:
+
+    irm https://drive.olsyn.com/install.ps1 | iex
+
+To see the steps without installing anything, add `-DryRun`. To check the wizard itself on a PC,
+`powershell -File install.ps1 -SelfTest` prints its checks and ends with "Self-test passed".
+
+Doing it by hand instead, or if the wizard cannot run: the steps below are the same ones.
+
 ## What Windows may show
 
 - **Your browser** may say the file isn't commonly downloaded. Choose to keep it (in Edge: the "..." menu next
@@ -14,7 +48,7 @@ nothing is lost if that happens. The signed release will not need any of the ste
   automatic (machine-learning) check, not a known virus, and we believe it is a false alarm. To stop it
   happening, allow Olsyn Drive's program folder as below.
 
-## Allow Olsyn Drive's program folder (once)
+## Allow Olsyn Drive's program folder by hand (once)
 
 Allow **only this folder**:
 
