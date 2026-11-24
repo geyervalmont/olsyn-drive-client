@@ -148,21 +148,36 @@ func TestReleaseSkipsOpenReadAndKeptFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	e.waitSynced(20 * time.Second)
+	// open one and keep reading the other from before the uploads finish
+	// until after the grace period has passed
 	h, err := e.fs.Open(ctx, "/open.bin", vfs.OpenFlags{Access: vfs.AccessRead, Share: vfs.ShareAll})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// keep reading read.bin while the grace period passes
-	deadline := time.Now().Add(400 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if _, err := e.readFile("/read.bin"); err != nil {
-			t.Fatal(err)
+	stop, readErr := make(chan struct{}), make(chan error, 1)
+	go func() {
+		defer close(readErr)
+		for {
+			if _, err := e.readFile("/read.bin"); err != nil {
+				readErr <- err
+				return
+			}
+			select {
+			case <-stop:
+				return
+			case <-time.After(50 * time.Millisecond):
+			}
 		}
-		time.Sleep(50 * time.Millisecond)
+	}()
+	e.waitSynced(20 * time.Second)
+	time.Sleep(400 * time.Millisecond)
+	open, read, kept := e.cached("/open.bin"), e.cached("/read.bin"), e.cached("/kept/b.bin")
+	close(stop)
+	if err := <-readErr; err != nil {
+		t.Fatal(err)
 	}
-	if !e.cached("/open.bin") || !e.cached("/read.bin") || !e.cached("/kept/b.bin") {
-		t.Fatal("released an open, recently read or kept file")
+	if !open || !read || !kept {
+		t.Fatalf("released: open %v, recently read %v, kept %v", !open, !read, !kept)
 	}
 	waitFor(t, 5*time.Second, "release once reading stopped", func() bool { return !e.cached("/read.bin") })
 	_ = h.Close()

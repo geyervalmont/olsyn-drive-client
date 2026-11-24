@@ -378,6 +378,13 @@ func (h *Handle) cleanContent() (*cache.Handle, error) {
 	switch {
 	case on.e.ContentKey != "":
 		ch, err = h.fs.cache.Open(on.e.ContentKey)
+		if errors.Is(err, cache.ErrNotFound) && on.e.VersionID == "" {
+			// sent (and perhaps cleared) since this node was opened: read the
+			// drive version the index now names
+			if cur, gerr := h.fs.idx.Get(on.e.ID); gerr == nil && cur.ContentKey == "" && cur.VersionID != "" {
+				on.e.ServerID, on.e.VersionID, on.e.ContentKey, on.e.Size = cur.ServerID, cur.VersionID, "", cur.Size
+			}
+		}
 		if errors.Is(err, cache.ErrNotFound) && on.e.VersionID != "" {
 			ch, err = h.fs.cache.Get(on.e.VersionID, on.e.Size)
 		}

@@ -143,3 +143,42 @@ func TestEvictionKeepsUnconfirmedUploadsLast(t *testing.T) {
 		t.Fatalf("evicted the unconfirmed upload first (claimed %v, read %v)", c.Has("v-claimed"), c.Has("read"))
 	}
 }
+
+// A reader still holding the local key after the commit finds the content
+// under its version key.
+func TestOpenFindsCommittedLocalKey(t *testing.T) {
+	c := openCache(t, t.TempDir(), 1<<30)
+	defer c.Close()
+	upload(t, c, "v1", 2*bs, Upload{Node: "n1", Check: CheckVerified})
+	h, err := c.Open("local-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	if h.Key() != "v1" || h.Size() != 2*bs {
+		t.Fatalf("opened %s (%d bytes)", h.Key(), h.Size())
+	}
+}
+
+// Every read counts for "recently read", not only the ones written to the
+// metadata (at most every few seconds).
+func TestEveryReadKeepsContent(t *testing.T) {
+	c := openCache(t, t.TempDir(), 1<<30)
+	defer c.Close()
+	upload(t, c, "v1", 2*bs, Upload{Node: "n1", Check: CheckVerified})
+	p := ReleasePolicy{AfterUpload: time.Nanosecond, KeepOpened: 200 * time.Millisecond, VerifyWait: time.Hour}
+	h, err := c.Open("v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.NoteRead()
+	time.Sleep(250 * time.Millisecond)
+	h.NoteRead() // within the metadata throttle
+	_ = h.Close()
+	if n, _ := c.ReleaseUploaded(time.Now(), p, nil); n != 0 {
+		t.Fatal("released content read a moment ago")
+	}
+	if n, _ := c.ReleaseUploaded(time.Now().Add(time.Second), p, nil); n != 1 {
+		t.Fatal("not released once reading stopped")
+	}
+}

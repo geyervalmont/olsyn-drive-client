@@ -92,6 +92,17 @@ type entry struct {
 	doomed    bool // remove when the last handle closes
 	bytes     int64
 	wgen      uint64 // bumped on every data or bitmap change
+	// lastRead is the last read, kept in memory on every read (meta.Read
+	// is written at most every few seconds)
+	lastRead time.Time
+}
+
+// readAt is when an application last read the content.
+func (e *entry) readAt() time.Time {
+	if e.lastRead.After(e.Read) {
+		return e.lastRead
+	}
+	return e.Read
 }
 
 // Cache is the content cache.
@@ -101,11 +112,14 @@ type Cache struct {
 	db      *bolt.DB
 	log     *slog.Logger
 
-	mu         sync.Mutex
-	entries    map[string]*entry
-	orphans    map[string]bool // data files no entry owns (since Open)
-	used       int64
-	changed    chan struct{}     // closed and replaced when space is freed
+	mu      sync.Mutex
+	entries map[string]*entry
+	orphans map[string]bool // data files no entry owns (since Open)
+	used    int64
+	changed chan struct{} // closed and replaced when space is freed
+	// moved maps a local key to the version key it was committed under,
+	// so a reader that still holds the local key finds the content
+	moved      map[string]string
 	metaWrites atomic.Uint64     // metadata transactions, for Stats
 	metaQ      map[string][]byte // metadata not yet written (nil value: delete)
 	metaSeq    uint64            // bumped by every queued metadata change
@@ -384,6 +398,9 @@ func (c *Cache) Open(key string) (*Handle, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e := c.entries[key]
+	if to, ok := c.moved[key]; e == nil && ok {
+		e = c.entries[to] // sent meanwhile: now the drive version's content
+	}
 	if e == nil || e.doomed {
 		return nil, ErrNotFound
 	}
@@ -913,6 +930,10 @@ func (c *Cache) CommitUpload(localKey, versionKey string, up Upload) error {
 		return fmt.Errorf("cache: commit: %w", err)
 	}
 	delete(c.entries, localKey)
+	if c.moved == nil || len(c.moved) >= 4096 {
+		c.moved = map[string]string{}
+	}
+	c.moved[localKey] = versionKey
 	e.key = versionKey
 	e.meta = snap
 	c.entries[versionKey] = e

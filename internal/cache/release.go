@@ -71,7 +71,7 @@ func unconfirmed(e *entry) bool {
 // now (before the caller's keep rule).
 func releasableLocked(e *entry, now time.Time, p ReleasePolicy) bool {
 	return !e.Dirty && e.opens == 0 && !e.doomed && !e.Sent.IsZero() && e.Check == CheckVerified &&
-		now.Sub(e.Sent) >= p.AfterUpload && now.Sub(e.Read) >= p.KeepOpened
+		now.Sub(e.Sent) >= p.AfterUpload && now.Sub(e.readAt()) >= p.KeepOpened
 }
 
 // NoteRead records that an application read the content now. It is kept
@@ -82,6 +82,7 @@ func (h *Handle) NoteRead() {
 	now := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	h.e.lastRead = now
 	if now.Sub(h.e.Read) < 10*time.Second {
 		return // one metadata write per file every few seconds at most
 	}
