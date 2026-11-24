@@ -3,6 +3,7 @@ package vfs
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"time"
 
@@ -86,6 +87,7 @@ func (fs *FS) pollChanges(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		fs.listingsMayBeStale(p.Changes)
 		for _, id := range relist {
 			fs.relist(id)
 		}
@@ -136,12 +138,7 @@ func (fs *FS) applyChange(tx *index.Tx, ch *driveapi.Change, relist *[]string) e
 		}
 		if ch.Resync == "subtree" && n.IsDir() {
 			if e, err := tx.BySID(n.ID); err == nil {
-				if err := fs.forgetSubtree(tx, e.ID); err != nil {
-					return err
-				}
-				if tx.Listed(parent.ID) {
-					*relist = append(*relist, e.ID)
-				}
+				return fs.resyncFolder(tx, e.ID, relist)
 			}
 		}
 	case driveapi.OpTrashed:
@@ -153,14 +150,57 @@ func (fs *FS) applyChange(tx *index.Tx, ch *driveapi.Change, relist *[]string) e
 	case driveapi.OpResync:
 		e, err := tx.BySID(ch.FolderID)
 		if err != nil {
-			return nil
+			return nil // never seen here: listed when first opened
 		}
-		if tx.Listed(e.ID) {
-			if err := tx.SetListed(e.ID, false); err != nil {
-				return err
-			}
-			*relist = append(*relist, e.ID)
+		return fs.resyncFolder(tx, e.ID, relist)
+	}
+	return nil
+}
+
+// listingsMayBeStale marks a listing in flight for a folder these changes
+// touch to fetch again: its answer may predate them, and writing it would
+// undo them (a child the feed added would be dropped as unseen).
+func (fs *FS) listingsMayBeStale(changes []driveapi.Change) {
+	fs.mu.Lock()
+	n := len(fs.listing)
+	fs.mu.Unlock()
+	if n == 0 {
+		return
+	}
+	var sids []string
+	for i := range changes {
+		ch := &changes[i]
+		switch {
+		case ch.Op == driveapi.OpResync:
+			sids = append(sids, ch.FolderID)
+		case ch.Node != nil:
+			sids = append(sids, ch.Node.ParentID, ch.Node.ID)
 		}
+	}
+	for _, sid := range sids {
+		e, err := fs.idx.BySID(sid)
+		if err != nil {
+			continue
+		}
+		fs.mu.Lock()
+		if c, ok := fs.listing[e.ID]; ok {
+			c.again = true
+		}
+		fs.mu.Unlock()
+	}
+}
+
+// resyncFolder forgets what is known under a folder the feed cannot
+// describe. A folder this PC had listed is listed again now (even when the
+// same page also upserts it, and even when a listing is in flight); one it
+// had not is listed when first opened.
+func (fs *FS) resyncFolder(tx *index.Tx, id string, relist *[]string) error {
+	was := tx.Listed(id)
+	if err := fs.forgetSubtree(tx, id); err != nil {
+		return err
+	}
+	if was && !slices.Contains(*relist, id) {
+		*relist = append(*relist, id)
 	}
 	return nil
 }
@@ -197,30 +237,23 @@ func (fs *FS) forgetSubtree(tx *index.Tx, id string) error {
 	return nil
 }
 
-// resetIndex drops everything the drive told us (keeping unsent local
-// changes and junk) and re-lists from the root.
+// maxEagerRelists bounds how many visited folders a reset lists again at
+// once (one after another, so the drive's rate limit is not hit); the rest
+// are listed when next opened.
+const maxEagerRelists = 32
+
+// resetIndex runs when the feed cannot say what changed: every folder
+// becomes unlisted, so each is listed again before it is next shown, and
+// a listing reconciles what the index holds (kept until then, with any
+// unsent local changes). The folders this PC had listed, the most recently
+// listed first, are listed again in the background now.
 func (fs *FS) resetIndex() {
+	var visited []index.Listing
 	fs.treeMu.Lock()
 	err := fs.idx.Update(func(tx *index.Tx) error {
-		var ids []string
-		if err := tx.All(func(e *index.Entry) error {
-			if e.ID != fs.cfg.RootID && !e.LocalOnly && e.ServerID != "" {
-				ids = append(ids, e.ID)
-			}
-			return nil
-		}); err != nil {
+		var err error
+		if visited, err = tx.Listings(); err != nil {
 			return err
-		}
-		for _, id := range ids {
-			if _, err := tx.Get(id); err != nil {
-				continue // removed with its folder
-			}
-			if fs.isPendingTree(tx, id) {
-				continue
-			}
-			if _, err := tx.Delete(id); err != nil && !errors.Is(err, index.ErrNotFound) {
-				return err
-			}
 		}
 		return tx.ForgetListings()
 	})
@@ -228,7 +261,45 @@ func (fs *FS) resetIndex() {
 	if err != nil {
 		fs.log.Warn("vfs: reset index", "err", err)
 	}
-	fs.relist(fs.cfg.RootID)
+	// a listing in flight may have been answered before the reset
+	fs.mu.Lock()
+	for _, c := range fs.listing {
+		c.again = true
+	}
+	fs.mu.Unlock()
+	ids := []string{fs.cfg.RootID}
+	for _, l := range visited {
+		if l.ID != fs.cfg.RootID && len(ids) < maxEagerRelists {
+			ids = append(ids, l.ID)
+		}
+	}
+	go fs.relistInOrder(ids)
+}
+
+// relistInOrder lists folders again one at a time, skipping any already
+// listed meanwhile (opened by someone).
+func (fs *FS) relistInOrder(ids []string) {
+	ctx := fs.ctx
+	if ctx == nil {
+		return
+	}
+	for _, id := range ids {
+		if ctx.Err() != nil {
+			return
+		}
+		if fs.idx.Listed(id) {
+			continue
+		}
+		c := fs.relist(id)
+		if c == nil {
+			continue
+		}
+		select {
+		case <-c.done:
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // streamLoop keeps the SSE stream open; every event (and every reconnect)

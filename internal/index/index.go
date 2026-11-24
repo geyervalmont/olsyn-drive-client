@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -356,6 +357,27 @@ func (t *Tx) SetListed(folderID string, listed bool) error {
 	var b [8]byte
 	binary.BigEndian.PutUint64(b[:], uint64(time.Now().Unix()))
 	return t.tx.Bucket(bDirs).Put([]byte(folderID), b[:])
+}
+
+// Listing is a folder whose children were fetched, and when.
+type Listing struct {
+	ID string
+	At time.Time
+}
+
+// Listings returns every listed folder, most recently listed first.
+func (t *Tx) Listings() ([]Listing, error) {
+	var out []Listing
+	err := t.tx.Bucket(bDirs).ForEach(func(k, v []byte) error {
+		var at time.Time
+		if len(v) == 8 {
+			at = time.Unix(int64(binary.BigEndian.Uint64(v)), 0)
+		}
+		out = append(out, Listing{ID: string(k), At: at})
+		return nil
+	})
+	slices.SortStableFunc(out, func(a, b Listing) int { return b.At.Compare(a.At) })
+	return out, err
 }
 
 // ForgetListings marks every folder as not listed (after a reset).

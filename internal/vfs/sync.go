@@ -241,10 +241,12 @@ func (fs *FS) execMkdir(ctx context.Context, op *journal.Op) error {
 		return nil
 	}
 	n, err := fs.api.CreateFolder(ctx, p.ServerID, e.Name, driveapi.ConflictFail, e.MTime)
+	adopted := false
 	if driveapi.IsNameConflict(err) {
 		// replay after a crash, or made elsewhere meanwhile: adopt a folder of
 		// that name; beside a file, make ours a conflict copy
 		n, err = fs.adoptFolder(ctx, p.ServerID, e.Name)
+		adopted = err == nil && n != nil && index.Fold(n.Name) == index.Fold(e.Name)
 	}
 	if driveapi.IsNotFound(err) {
 		return &heldError{code: "folder_gone", reason: "The folder this was made in was deleted on the drive."}
@@ -270,7 +272,9 @@ func (fs *FS) execMkdir(ctx context.Context, op *journal.Op) error {
 		if err := tx.Put(cur); err != nil {
 			return err
 		}
-		return tx.SetListed(cur.ID, true)
+		// a folder made here is empty on the drive; one adopted may hold
+		// files the feed never told us about: list it when next opened
+		return tx.SetListed(cur.ID, !adopted)
 	})
 }
 

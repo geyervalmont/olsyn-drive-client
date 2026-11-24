@@ -81,6 +81,8 @@ type Server struct {
 	heartbeat *driveapi.Heartbeat
 	faults    faults
 	intercept func(w http.ResponseWriter, r *http.Request) bool
+	// quiet: changes are made without a feed entry (a feed that missed them)
+	quiet bool
 }
 
 type faults struct {
@@ -718,7 +720,24 @@ func (s *Server) addBlobLocked(n *node, content blob, sha, fingerprint string, m
 	return v
 }
 
+// Quietly runs fn with the changes feed switched off, as if the feed had
+// missed what fn changes (only a listing shows it).
+func (s *Server) Quietly(fn func()) {
+	s.mu.Lock()
+	s.quiet = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.quiet = false
+		s.mu.Unlock()
+	}()
+	fn()
+}
+
 func (s *Server) emitLocked(nodeID, op string) {
+	if s.quiet {
+		return
+	}
 	s.seq++
 	s.events = append(s.events, event{seq: s.seq, nodeID: nodeID, op: op})
 	parent := ""

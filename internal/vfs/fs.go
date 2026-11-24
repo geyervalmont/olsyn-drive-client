@@ -70,6 +70,10 @@ type running struct {
 type listCall struct {
 	done chan struct{}
 	err  error
+	// again: the folder changed while this listing was in flight (a resync
+	// or a reset), so its answer may be stale: fetch once more before done.
+	// Guarded by FS.mu.
+	again bool
 }
 
 // New opens the file system over the given parts. It replays the journal's
@@ -464,11 +468,19 @@ func (fs *FS) startListing(dir *index.Entry) *listCall {
 		ctx = context.Background()
 	}
 	go func() {
-		c.err = fs.fetchListing(ctx, dir.ID, dir.ServerID)
-		fs.mu.Lock()
-		delete(fs.listing, dir.ID)
-		fs.mu.Unlock()
-		close(c.done)
+		for {
+			c.err = fs.fetchListing(ctx, dir.ID, dir.ServerID)
+			fs.mu.Lock()
+			if c.again && c.err == nil && ctx.Err() == nil {
+				c.again = false
+				fs.mu.Unlock()
+				continue
+			}
+			delete(fs.listing, dir.ID)
+			fs.mu.Unlock()
+			close(c.done)
+			return
+		}
 	}()
 	return c
 }
@@ -512,13 +524,22 @@ func (fs *FS) fetchListing(ctx context.Context, id, sid string) error {
 	})
 }
 
-// relist refreshes a folder in the background (after a resync).
-func (fs *FS) relist(id string) {
+// relist refreshes a folder in the background (after a resync). A listing
+// already in flight may have been answered before the change, so it runs
+// again rather than being reused.
+func (fs *FS) relist(id string) *listCall {
 	e, err := fs.idx.Get(id)
-	if err != nil || e.ServerID == "" {
-		return
+	if err != nil || e.ServerID == "" || e.LocalOnly {
+		return nil
 	}
-	fs.startListing(e)
+	fs.mu.Lock()
+	if c, ok := fs.listing[id]; ok {
+		c.again = true
+		fs.mu.Unlock()
+		return c
+	}
+	fs.mu.Unlock()
+	return fs.startListing(e)
 }
 
 // mergeNode writes what the drive says about a node into the index, under
