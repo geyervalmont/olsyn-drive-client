@@ -82,6 +82,9 @@ type Mount struct {
 	Letter *string  `json:"letter"`
 	Path   string   `json:"path"`
 	Error  *Problem `json:"error"`
+	// LetterConfirmed is false until the person has chosen the letter
+	// (first run): the agent does not mount before that.
+	LetterConfirmed bool `json:"letter_confirmed"`
 }
 
 // Summary is the overall transfer progress.
@@ -280,8 +283,17 @@ type SettingsResponse struct {
 
 // SettingsChoices lists valid values for the UI's pickers.
 type SettingsChoices struct {
-	DriveLetters   []string `json:"drive_letters"`
-	UpdateChannels []string `json:"update_channels"`
+	// DriveLetters are the letters the drive can use: the free ones (no
+	// volume, network mapping — connected or remembered — or subst), plus
+	// the current one while the drive is mounted there. Last first.
+	DriveLetters []string `json:"drive_letters"`
+	// LettersInUse maps each other letter D:-Z: to what holds it:
+	// "volume", "network" or "subst".
+	LettersInUse map[string]string `json:"letters_in_use"`
+	// SuggestedLetter is the configured letter if usable, otherwise the next
+	// free one; "" off Windows or when every letter is taken.
+	SuggestedLetter string   `json:"suggested_letter"`
+	UpdateChannels  []string `json:"update_channels"`
 }
 
 // Unsent counts local changes not yet on the drive.

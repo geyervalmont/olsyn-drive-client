@@ -46,6 +46,27 @@ describe('first-run onboarding', () => {
     await waitFor(() => expect(screen.getByRole('navigation', { name: 'Olsyn Drive' })).toBeTruthy())
   })
 
+  it('does not connect before the letter is chosen, and picks the next free one when W: is taken', async () => {
+    const { agent } = renderWithAgent(<App surface="main" />, 'letter-taken')
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))
+    await screen.findByText('Your code')
+    await act(async () => agent.tick(8))
+    expect(await screen.findByRole('heading', { name: 'Choose a letter for the drive.' })).toBeTruthy()
+    expect(agent.state().mount.state).toBe('unmounted')
+    expect(agent.state().mount.letter_confirmed).toBe(false)
+    const group = await screen.findByRole('radiogroup', { name: 'Drive letter' })
+    expect(within(group).getByRole('radio', { checked: true }).textContent).toBe('X:')
+    expect(within(group).queryByText('W:')).toBeNull()
+    expect(within(group).queryByText('O:')).toBeNull() // a disconnected network mapping
+    expect(screen.getByRole('status').textContent).toMatch(/W: is already used on this PC by a network drive, so X: is selected/)
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Connect X:' }))
+    })
+    await act(async () => agent.tick(2))
+    expect(await screen.findByRole('heading', { name: 'Your drive is X:' })).toBeTruthy()
+    expect(agent.state().mount.letter_confirmed).toBe(true)
+  })
+
   it('offers a new code when the old one runs out', async () => {
     const { agent } = renderWithAgent(<App surface="main" />, 'link-expired')
     fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -175,9 +176,38 @@ func TestSignInHappyPath(t *testing.T) {
 	if si.State != "waiting" || si.UserCode != "BCDF-GHJK" || si.VerificationURL == "" {
 		t.Fatalf("signin = %+v", si)
 	}
-	s := h.waitState("connected and mounted", func(s State) bool {
-		return s.Connection == ConnConnected && s.Mount.State == MountMounted && s.Ready
+	// first run: signed in, but the drive waits for the person to choose
+	// its letter
+	s := h.waitState("connected, letter not chosen", func(s State) bool {
+		return s.Connection == ConnConnected && s.Ready && s.Account != nil
 	})
+	if s.Mount.State != MountUnmounted || s.Mount.LetterConfirmed {
+		t.Fatalf("mounted before the letter was chosen: %+v", s.Mount)
+	}
+	// W: is a remembered network mapping on this PC: not offered, X: suggested
+	h.system.mu.Lock()
+	h.system.lettersInUse = map[string]string{"D:": platform.LetterVolume, "W:": platform.LetterNetwork}
+	h.system.mu.Unlock()
+	var set SettingsResponse
+	if err := h.client.Do(context.Background(), http.MethodGet, "/v1/settings", nil, &set); err != nil {
+		t.Fatal(err)
+	}
+	if set.Choices.SuggestedLetter != "X:" || set.Choices.LettersInUse["W:"] != platform.LetterNetwork || slices.Contains(set.Choices.DriveLetters, "W:") {
+		t.Fatalf("choices = %+v", set.Choices)
+	}
+	var ae *APIError
+	if err := h.post("/v1/mount", map[string]string{"letter": "W:"}, nil); !errors.As(err, &ae) || ae.Code != "letter_taken" {
+		t.Fatalf("mount on a taken letter: %v", err)
+	}
+	if err := h.post("/v1/mount", map[string]string{"letter": "x"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	s = h.waitState("mounted on the chosen letter", func(s State) bool {
+		return s.Mount.State == MountMounted && s.Mount.Letter != nil && *s.Mount.Letter == "X:" && s.Mount.LetterConfirmed
+	})
+	if saved, _ := os.ReadFile(filepath.Join(h.paths.State, "agent-state.json")); !strings.Contains(string(saved), `"letter_confirmed":true`) {
+		t.Fatalf("confirmation not kept: %s", saved)
+	}
 	if s.Account == nil || s.Account.Email != "person@example.test" || s.Account.DeviceID != "dev-1" {
 		t.Fatalf("account = %+v", s.Account)
 	}

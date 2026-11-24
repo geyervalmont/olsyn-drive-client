@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/geyervalmont/olsyn-drive-client/internal/platform"
+	"github.com/geyervalmont/olsyn-drive-client/internal/settings"
 )
 
 // apiError is an IPC error with its HTTP status and code.
@@ -323,7 +324,10 @@ func (a *Agent) runSession(ctx context.Context, sess Session) {
 	}
 	a.mu.Lock()
 	a.phase = phaseRunning
-	wantMount := a.mountWanted
+	wantMount := a.mountWanted && a.letterConfirmed
+	if a.mountWanted && !a.letterConfirmed {
+		a.log.Info("not mounting until the drive letter is chosen")
+	}
 	a.mu.Unlock()
 	a.emitState()
 	if wantMount {
@@ -557,18 +561,53 @@ func (a *Agent) canMount() error {
 	return nil
 }
 
-// Mount connects the drive letter (asynchronously; progress via state events).
-func (a *Agent) Mount(ctx context.Context) (Mount, bool, error) {
+// Mount connects the drive letter (asynchronously; progress via state
+// events). letter, when set, is the person's choice: it must be free, it is
+// saved as the drive_letter setting, and (like any explicit mount) it
+// confirms the letter, so the agent mounts at start from then on.
+func (a *Agent) Mount(ctx context.Context, letter string) (Mount, bool, error) {
 	if err := a.canMount(); err != nil {
 		return Mount{}, false, err
 	}
+	if letter != "" {
+		letter = settings.NormalizeDriveLetter(letter)
+		if len(letter) != 2 || letter[0] < 'D' || letter[0] > 'Z' {
+			return Mount{}, false, invalid("letter", "Choose a letter from D: to Z:.")
+		}
+	}
+	inUse, err := a.opts.System.DriveLettersInUse()
+	if err != nil {
+		a.log.Warn("could not list drive letters", "err", err)
+	}
 	a.mu.Lock()
 	if a.mount.State == MountMounted || a.mount.State == MountMounting {
-		m := a.mount
+		m := a.mountStateLocked()
 		a.mu.Unlock()
+		if letter != "" && m.Letter != nil && *m.Letter != letter {
+			return Mount{}, false, newAPIError(409, "mounted", "The drive is already connected as "+*m.Letter+". Change the letter in Settings.")
+		}
 		return m, true, nil
 	}
-	a.mountWanted = true
+	if letter != "" {
+		if kind := inUse[letter]; kind != "" {
+			a.mu.Unlock()
+			e := newAPIError(409, "letter_taken", letter+" is already used on this PC by "+letterUser(kind)+". Choose another letter.")
+			e.Extra = map[string]any{"letter": letter, "kind": kind}
+			return Mount{}, false, e
+		}
+		if letter != a.settings.DriveLetter {
+			next := a.settings
+			next.DriveLetter = letter
+			if err := settings.Save(a.settingsPath, next); err != nil {
+				a.mu.Unlock()
+				return Mount{}, false, err
+			}
+			a.settings = next
+			a.mount.Letter = letterPtr(letter)
+			a.hub.Publish("settings", next)
+		}
+	}
+	a.mountWanted, a.letterConfirmed = true, true
 	a.saveAgentStateLocked()
 	runCtx := a.ctx
 	a.mu.Unlock()
@@ -589,6 +628,17 @@ func (a *Agent) doMount(ctx context.Context) {
 	a.mount = Mount{State: MountMounting, Letter: letterPtr(letter)}
 	a.mu.Unlock()
 	a.emitState()
+	if inUse, err := a.opts.System.DriveLettersInUse(); err == nil && inUse[letter] != "" {
+		// taken since it was chosen (a network drive mapped meanwhile, say):
+		// say so plainly instead of a driver error
+		a.mu.Lock()
+		a.mount = Mount{State: MountFailed, Letter: letterPtr(letter), Error: &Problem{"letter_taken",
+			letter + " is already used on this PC by " + letterUser(inUse[letter]) + ". Choose another letter in Settings."}}
+		a.mu.Unlock()
+		a.log.Warn("mount: letter taken", "letter", letter, "by", inUse[letter])
+		a.emitState()
+		return
+	}
 	mctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	path, err := a.opts.Mounter.Mount(mctx, letter)
 	cancel()
@@ -734,4 +784,22 @@ func drivePathToLocal(mountPath, drivePath string) string {
 	// Cleaning a rooted path removes every "..", so the result stays under mountPath.
 	clean := filepath.Clean("/" + strings.TrimPrefix(filepath.ToSlash(drivePath), "/"))
 	return filepath.Join(mountPath, filepath.FromSlash(strings.TrimPrefix(clean, "/")))
+}
+
+// mountStateLocked is the mount as the API shows it.
+func (a *Agent) mountStateLocked() Mount {
+	m := a.mount
+	m.LetterConfirmed = a.letterConfirmed
+	return m
+}
+
+// letterUser names what holds a drive letter, for messages.
+func letterUser(kind string) string {
+	switch kind {
+	case platform.LetterNetwork:
+		return "a network drive"
+	case platform.LetterSubst:
+		return "a folder shown as a drive (subst)"
+	}
+	return "another drive"
 }

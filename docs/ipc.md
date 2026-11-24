@@ -124,8 +124,12 @@ other keys are extra detail named per code below.
   the mount is back or has failed). Used by the update health check.
 - `account`: `null` when signed out. `device_name` is this PC's name as the drive's device list shows it.
 - `signin`: `null` or a `SignIn` while linking (and for the last outcome until the next sign-in).
-- `mount.state`: `unmounted` | `mounting` | `mounted` | `unmounting` | `failed`. `error` is `null` or `{code, message}`.
+- `mount.state`: `unmounted` | `mounting` | `mounted` | `unmounting` | `failed`. `error` is `null` or `{code, message}`
+  (`letter_taken` when the letter is held by something else at mount time).
   `letter` is the configured letter (Windows) or `null`; `path` is where files are (`W:\`, a mount point).
+  `letter_confirmed`: `false` from the first sign-in until the person chooses the letter (the UI's letter step, or
+  `olsyn-drive login`). The agent never mounts before that: the first `POST /v1/mount` (with or without `letter`)
+  confirms it, and from then on the agent mounts at every start. Absent (agents before 1.1) means `true`.
 - `transfers`: the `Summary`, also sent alone as the `summary` event.
 - `update`: an `Update`. `driver`: a `Driver`.
 - `first_run`: `true` until this PC has been signed in once (the UI opens with its welcome step); stays `false`
@@ -336,8 +340,14 @@ files are ordinary transfers: retry, cancel and the held list work on them as on
 ### Settings
 
 `GET /v1/settings` → 200
-`{"settings": Settings, "defaults": Settings, "choices": {"drive_letters": ["W:", "X:"], "update_channels": ["stable", "beta"]}, "pending_restart": []}`.
-`choices.drive_letters` is the free letters plus the current one (empty off Windows).
+`{"settings": Settings, "defaults": Settings, "choices": {"drive_letters": ["Z:", "Y:", "X:"], "letters_in_use": {"D:": "volume", "W:": "network"}, "suggested_letter": "X:", "update_channels": ["stable", "beta"]}, "pending_restart": []}`.
+`choices.drive_letters` is the letters D:-Z: nothing holds, last first, plus the current one while the drive is
+mounted there (empty off Windows). A letter is held by a volume (`volume`), a network mapping (`network`: connected,
+or remembered but disconnected — `net use` lists it as Unavailable and Explorer still shows it under This PC;
+read from WNetGetConnection and HKCU\Network) or a subst'd folder (`subst`); `letters_in_use` maps each held
+letter to which. `suggested_letter` is the configured letter when free, else the next free one towards Z:, then
+the nearest below it (`""` when none is free, or off Windows). `PATCH` of a held `drive_letter` → 422
+`invalid_setting` (`field: "drive_letter"`).
 
 `PATCH /v1/settings` body: a JSON merge patch (RFC 7396) of `Settings`, e.g. `{"bandwidth": {"up_bps": 5000000}}`
 → 200 same shape as GET. Validated as a whole; 422 `invalid_setting` with `field` (dotted) and nothing saved.
@@ -348,8 +358,16 @@ remounts when mounted (409 `busy` while files are open on the drive); `update_ch
 
 ### Mount
 
-`POST /v1/mount` → 202 `{"mount": Mount}`; progress by `state` events. 409 `not_signed_in`, `driver_missing`,
-`driver_outdated`, `update_required`. Already mounted → 200.
+`POST /v1/mount` body `{"letter": "X:"}` (optional) → 202 `{"mount": Mount}`; progress by `state` events. With
+`letter` (the person's choice in the letter step): it must be free (409 `letter_taken` with `letter` and `kind`;
+422 `invalid` outside D:-Z:) and becomes the `drive_letter` setting (a `settings` event follows). Any mount request
+sets `mount.letter_confirmed`. 409 `not_signed_in`, `driver_missing`, `driver_outdated`, `update_required`;
+409 `mounted` when already mounted at another letter (change it with `PATCH /v1/settings`). Already mounted → 200.
+
+First run, in order: sign in → (driver) → the UI's letter step shows `choices.drive_letters` with
+`suggested_letter` selected and, when the configured letter is in `letters_in_use`, says what holds it → `POST
+/v1/mount {"letter": …}` → `mounted`. `olsyn-drive login` does the same with `--letter` or the suggested letter
+(`--no-mount` skips it).
 `POST /v1/unmount` body `{"force": false}` → 202 `{"mount": Mount}`. 409 `busy` with `open_files` while files are open
 on the drive, unless `force`. Unsaved data already written is kept and still uploads.
 Whether the drive is mounted is remembered: the agent remounts at its next start only if it was mounted.

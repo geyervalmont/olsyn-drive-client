@@ -9,6 +9,7 @@ import type {
   CodeMessage,
   Driver,
   Issue,
+  LetterUse,
   ListState,
   Mount,
   Settings,
@@ -61,6 +62,16 @@ const err = (status: number, error: string, message: string, extra: Record<strin
   body: { error, message, ...extra },
 })
 const ok = (body: unknown, status = 200): MockResponse => ({ status, body })
+
+/** The configured letter if free, else the next free one towards Z:, then the nearest before it (as the agent does). */
+export function suggestLetter(want: string, inUse: Record<string, string>): string {
+  const code = /^[D-Z]:$/.test(want) ? want.charCodeAt(0) : 87
+  const free = (c: number) => !inUse[String.fromCharCode(c) + ':']
+  if (free(code)) return String.fromCharCode(code) + ':'
+  for (let c = code + 1; c <= 90; c++) if (free(c)) return String.fromCharCode(c) + ':'
+  for (let c = code - 1; c >= 68; c--) if (free(c)) return String.fromCharCode(c) + ':'
+  return ''
+}
 
 export class MockAgent {
   readonly scenario: ScenarioName
@@ -193,14 +204,21 @@ export class MockAgent {
     this.reason = null
   }
 
+  /** The person has chosen the drive letter (first run: not yet). */
+  private letterConfirmed = true
+  /** Letters something else holds on this "PC". */
+  private lettersInUse: Record<string, LetterUse> = { 'D:': 'volume' }
+
   private mounted() {
     this.mount = { state: 'mounted', letter: this.settings.drive_letter, path: this.settings.drive_letter + String.fromCharCode(92), error: null }
   }
 
   private setup() {
     const s = this.scenario
-    if (s === 'first-run' || s === 'signin' || s === 'link-expired') {
+    if (s === 'first-run' || s === 'signin' || s === 'link-expired' || s === 'letter-taken') {
+      this.letterConfirmed = false
       if (s === 'first-run') this.driver = { state: 'missing', name: 'winfsp', version: null, min_version: '2.0', error: null }
+      if (s === 'letter-taken') this.lettersInUse = { 'D:': 'volume', 'O:': 'network', 'W:': 'network' }
       return
     }
     if (s === 'signed-out') {
@@ -525,7 +543,7 @@ export class MockAgent {
       account: this.account,
       device_name: this.deviceName(),
       signin: this.signin,
-      mount: this.mount,
+      mount: { ...this.mount, letter_confirmed: this.letterConfirmed },
       paused: this.paused,
       paused_until: this.pausedUntil ? new Date(this.pausedUntil).toISOString() : null,
       update: this.update,
@@ -697,7 +715,7 @@ export class MockAgent {
       case 'PATCH /v1/settings':
         return this.patchSettings(b)
       case 'POST /v1/mount':
-        return this.doMount()
+        return this.doMount(typeof b.letter === 'string' ? b.letter : undefined)
       case 'POST /v1/unmount':
         this.mount = { ...this.mount, state: 'unmounted', path: null }
         return ok({ mount: this.mount }, 202)
@@ -940,12 +958,15 @@ export class MockAgent {
   }
 
   private settingsResponse(): SettingsResponse {
-    const free = ['W:', 'X:', 'Y:', 'Z:', 'V:', 'T:', 'S:', 'R:', 'P:', 'O:', 'N:', 'M:']
-    const letters = Array.from(new Set([this.settings.drive_letter, ...free])).sort()
+    const inUse = { ...this.lettersInUse }
+    const ours = this.mount.state === 'mounted' ? this.mount.letter : null
+    if (ours) delete inUse[ours]
+    const all = Array.from({ length: 23 }, (_, i) => String.fromCharCode(68 + i) + ':')
+    const letters = all.filter((l) => !inUse[l] || l === ours).sort()
     return {
       settings: this.settings,
       defaults: { ...this.settings, drive_letter: 'W:', cache_cap_bytes: 50 * GB, bandwidth: { up_bps: 0, down_bps: 0 }, start_at_login: true, update_channel: 'stable' },
-      choices: { drive_letters: letters, update_channels: ['stable', 'beta'] },
+      choices: { drive_letters: letters, letters_in_use: inUse, suggested_letter: suggestLetter(this.settings.drive_letter, inUse), update_channels: ['stable', 'beta'] },
       pending_restart: [],
     }
   }
@@ -975,10 +996,21 @@ export class MockAgent {
     return ok({ ...this.settingsResponse(), pending_restart: pending })
   }
 
-  private doMount(): MockResponse {
+  private doMount(letter?: string): MockResponse {
     if (!this.account) return err(409, 'not_signed_in', 'Sign in first.')
     if (this.driver.state === 'missing' || this.driver.state === 'installing') return err(409, 'driver_missing', 'Install the driver first.')
     if (this.mount.state === 'mounted') return ok({ mount: this.mount })
+    if (letter !== undefined) {
+      const l = letter.toUpperCase().replace(/:?$/, ':')
+      if (!/^[D-Z]:$/.test(l)) return err(422, 'invalid', 'Choose a letter from D: to Z:.', { field: 'letter' })
+      const kind = this.lettersInUse[l]
+      if (kind) return err(409, 'letter_taken', l + ' is already used on this PC by ' + (kind === 'network' ? 'a network drive' : 'another drive') + '. Choose another letter.', { letter: l, kind })
+      if (l !== this.settings.drive_letter) {
+        this.settings = { ...this.settings, drive_letter: l }
+        this.emit('settings', this.settings)
+      }
+    }
+    this.letterConfirmed = true
     this.mount = { state: 'mounting', letter: this.settings.drive_letter, path: null, error: null }
     this.at(1.2, () => {
       this.mounted()

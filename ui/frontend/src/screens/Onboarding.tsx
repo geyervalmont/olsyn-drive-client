@@ -21,15 +21,17 @@ export function Onboarding({ onDone, startAt = 'welcome' }: { onDone: () => void
   const [step, setStep] = useState<OnboardingStep>(startAt)
   const [driverStepShown, setDriverStepShown] = useState(false)
 
-  // Signed in: move on by itself.
+  // Signed in: move on by itself. The drive is not connected before the
+  // person has chosen its letter (mount.letter_confirmed).
+  const letterChosen = state?.mount.letter_confirmed !== false && state?.mount.state === 'mounted'
   useEffect(() => {
     if (step !== 'signin' || !state?.account) return
     if (needsDriver(state.driver.state)) {
       setDriverStepShown(true)
       setStep('driver')
-    } else if (state.mount.state === 'mounted') setStep('done')
+    } else if (letterChosen) setStep('done')
     else setStep('letter')
-  }, [step, state?.account, state?.driver.state, state?.mount.state])
+  }, [step, state?.account, state?.driver.state, letterChosen])
 
   const steps: { key: OnboardingStep; label: string }[] = [
     { key: 'signin', label: 'Sign in' },
@@ -56,7 +58,7 @@ export function Onboarding({ onDone, startAt = 'welcome' }: { onDone: () => void
         )}
         {step === 'welcome' && <Welcome onNext={() => setStep('signin')} />}
         {step === 'signin' && <SignInStep onBack={() => setStep('welcome')} />}
-        {step === 'driver' && <DriverStep onNext={() => (state?.mount.state === 'mounted' ? setStep('done') : setStep('letter'))} />}
+        {step === 'driver' && <DriverStep onNext={() => (letterChosen ? setStep('done') : setStep('letter'))} />}
         {step === 'letter' && <LetterStep onNext={() => setStep('done')} />}
         {step === 'done' && <DoneStep onDone={onDone} />}
       </div>
@@ -316,7 +318,8 @@ function LetterStep({ onNext }: { onNext: () => void }) {
       .settings()
       .then((s) => {
         setSettings(s)
-        setChoice((c) => c ?? s.settings.drive_letter)
+        const usable = s.choices.drive_letters
+        setChoice((c) => (c && usable.includes(c) ? c : s.choices.suggested_letter || (usable.includes(s.settings.drive_letter) ? s.settings.drive_letter : (usable[0] ?? null))))
       })
       .catch((err: unknown) => setLoadError(errorText(err)))
   }
@@ -326,12 +329,21 @@ function LetterStep({ onNext }: { onNext: () => void }) {
     if (connecting && mount?.state === 'mounted') onNext()
   }, [connecting, mount?.state, onNext])
 
-  const letters = settings?.choices.drive_letters ?? []
+  const letters = [...(settings?.choices.drive_letters ?? [])].sort()
+  // The usual letter is taken on this PC (a disk, a network drive — even a
+  // disconnected one — or subst): say so, next to the letter picked instead.
+  const usual = settings?.settings.drive_letter ?? 'W:'
+  const usualTakenBy = settings?.choices.letters_in_use?.[usual]
   const connect = () =>
     run('connect', async () => {
-      if (settings && choice && choice !== settings.settings.drive_letter) await client.patchSettings({ drive_letter: choice })
-      setConnecting(true)
-      await client.mount()
+      try {
+        setConnecting(true)
+        await client.mount(choice ?? undefined)
+      } catch (e) {
+        setConnecting(false)
+        load() // the letters may have changed meanwhile
+        throw e
+      }
     })
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -353,6 +365,11 @@ function LetterStep({ onNext }: { onNext: () => void }) {
         Choose a letter for the drive.
       </h1>
       <p className="onb-lead">W: is the usual one, so paths match on every PC in the studio. Only letters free on this PC are shown.</p>
+      {usualTakenBy && choice && choice !== usual && (
+        <p className="onb-note" role="status">
+          {usual} is already used on this PC by {letterUseText(usualTakenBy)}, so {choice} is selected.
+        </p>
+      )}
       {loadError && <InlineError message={loadError} onRetry={load} />}
       {!settings && !loadError && (
         <p className="code-wait">
@@ -386,6 +403,12 @@ function LetterStep({ onNext }: { onNext: () => void }) {
       </div>
     </section>
   )
+}
+
+function letterUseText(kind: string): string {
+  if (kind === 'network') return 'a network drive'
+  if (kind === 'subst') return 'a folder shown as a drive'
+  return 'another drive'
 }
 
 function DoneStep({ onDone }: { onDone: () => void }) {

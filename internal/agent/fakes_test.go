@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"maps"
 	"sync"
 	"time"
 
@@ -263,6 +264,8 @@ type fakeSystem struct {
 	autostart *bool
 	driver    platform.DriverInfo
 	routes    []string
+	// lettersInUse overrides the default (only D: taken)
+	lettersInUse map[string]string
 }
 
 func (s *fakeSystem) OpenURL(ctx context.Context, u string) error {
@@ -293,8 +296,13 @@ func (s *fakeSystem) DetectDriver() (platform.DriverInfo, error) {
 }
 
 func (s *fakeSystem) InstallDriver(ctx context.Context) error { return platform.ErrDeclined }
-func (s *fakeSystem) FreeDriveLetters() ([]string, error) {
-	return []string{"Z:", "Y:", "X:", "W:"}, nil
+func (s *fakeSystem) DriveLettersInUse() (map[string]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lettersInUse != nil {
+		return maps.Clone(s.lettersInUse), nil
+	}
+	return map[string]string{"D:": platform.LetterVolume}, nil
 }
 func (s *fakeSystem) DownloadsDir() (string, error)        { return "/nonexistent", nil }
 func (s *fakeSystem) FreeDiskBytes(string) (uint64, error) { return 100 << 30, nil }

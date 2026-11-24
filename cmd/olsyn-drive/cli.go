@@ -175,6 +175,8 @@ func humanBytes(n int64) string {
 func cmdLogin(e *env, args []string) int {
 	fs := newFlags(e, "login")
 	noBrowser := fs.Bool("no-browser", false, "print the link instead of opening the browser")
+	letter := fs.String("letter", "", "drive letter to connect after signing in (default: W:, or the next free one)")
+	noMount := fs.Bool("no-mount", false, "sign in only; choose the drive letter later in the app")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -207,7 +209,10 @@ func cmdLogin(e *env, args []string) int {
 			who := cmp.Or(st.Account.Email, st.Account.Name, "your account")
 			e.printf("Signed in as %s.\n", who)
 		}
-		return exitOK
+		if *noMount || st.Mount.LetterConfirmed {
+			return exitOK
+		}
+		return connectLetter(e, c, *letter)
 	case "denied":
 		e.errorf("Sign-in was declined in the browser.\n")
 	case "expired":
@@ -222,6 +227,43 @@ func cmdLogin(e *env, args []string) int {
 		}
 	}
 	return exitError
+}
+
+// connectLetter confirms the drive letter after a first sign-in from the
+// command line (the agent does not mount before that): the one asked for,
+// or the configured one when it is free, or the next free one.
+func connectLetter(e *env, c *agent.Client, want string) int {
+	var set agent.SettingsResponse
+	if err := c.Do(e.ctx, http.MethodGet, "/v1/settings", nil, &set); err != nil {
+		return e.report(err)
+	}
+	hasLetters := len(set.Choices.DriveLetters) > 0 || len(set.Choices.LettersInUse) > 0 // false off Windows
+	if want == "" && hasLetters {
+		want = set.Choices.SuggestedLetter
+		if want == "" {
+			e.errorf("Every drive letter is in use on this PC: free one, then run \"olsyn-drive login --letter X:\".\n")
+			return exitError
+		}
+		if cfg := set.Settings.DriveLetter; want != "" && want != cfg {
+			e.printf("%s is in use on this PC (%s), so the drive uses %s.\n", cfg, set.Choices.LettersInUse[cfg], want)
+		}
+	}
+	var body any
+	if want != "" {
+		body = map[string]string{"letter": want}
+	}
+	if err := c.Do(e.ctx, http.MethodPost, "/v1/mount", body, nil); err != nil {
+		var ae *agent.APIError
+		if errors.As(err, &ae) && (ae.Code == "driver_missing" || ae.Code == "driver_outdated") {
+			e.printf("The drive letter needs the WinFsp driver: open Olsyn Drive to install it and choose the letter.\n")
+			return exitOK
+		}
+		return e.report(err)
+	}
+	if want != "" {
+		e.printf("Connecting the drive as %s.\n", want)
+	}
+	return exitOK
 }
 
 // signInGrace is how long login waits past the code's expiry for the agent

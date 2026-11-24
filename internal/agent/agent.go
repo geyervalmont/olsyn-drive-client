@@ -93,6 +93,9 @@ type Agent struct {
 	linkCancel     context.CancelFunc
 	mount          Mount
 	mountWanted    bool
+	// letterConfirmed: the person chose the drive letter (first run: the
+	// drive stays unmounted until then)
+	letterConfirmed bool
 	paused         bool
 	pausedUntil    *time.Time
 	pauseTimer     *time.Timer
@@ -128,6 +131,10 @@ type agentState struct {
 	MountWanted bool `json:"mount_wanted"`
 	// LinkedOnce: this PC has been signed in at least once (first_run off).
 	LinkedOnce bool `json:"linked_once"`
+	// LetterConfirmed: the person chose (or accepted) the drive letter. The
+	// drive is not mounted before that. Absent in files from before 1.1:
+	// then an earlier sign-in counts as confirmation.
+	LetterConfirmed *bool `json:"letter_confirmed,omitempty"`
 }
 
 // New loads settings and the account, and prepares the agent.
@@ -200,7 +207,8 @@ func New(opts Options) (*Agent, error) {
 		a.update.State = "failed"
 		a.update.Error = opts.RolledBack
 	}
-	if st, err := a.loadAgentState(); err == nil {
+	st, stErr := a.loadAgentState()
+	if stErr == nil {
 		a.mountWanted = st.MountWanted
 		a.linkedOnce = st.LinkedOnce
 	}
@@ -209,6 +217,11 @@ func New(opts Options) (*Agent, error) {
 		a.log.Warn("account file unreadable; starting signed out", "err", err)
 	}
 	a.account = acc
+	if st.LetterConfirmed != nil {
+		a.letterConfirmed = *st.LetterConfirmed
+	} else {
+		a.letterConfirmed = st.LinkedOnce || acc != nil
+	}
 	a.refreshDriverLocked()
 	return a, nil
 }
@@ -311,7 +324,7 @@ func (a *Agent) stateLocked() State {
 		Account:     a.account,
 		DeviceName:  a.deviceNameLocked(),
 		SignIn:      a.signin,
-		Mount:       a.mount,
+		Mount:       a.mountStateLocked(),
 		Paused:      a.paused,
 		PausedUntil: a.pausedUntil,
 		Transfers:   fs.Summary,
@@ -557,7 +570,8 @@ func (a *Agent) loadAgentState() (agentState, error) {
 }
 
 func (a *Agent) saveAgentStateLocked() {
-	data, _ := json.Marshal(agentState{MountWanted: a.mountWanted, LinkedOnce: a.linkedOnce})
+	confirmed := a.letterConfirmed
+	data, _ := json.Marshal(agentState{MountWanted: a.mountWanted, LinkedOnce: a.linkedOnce, LetterConfirmed: &confirmed})
 	if err := settings.WriteFileAtomic(a.statePath, data, 0o600); err != nil {
 		a.log.Warn("could not save agent state", "err", err)
 	}

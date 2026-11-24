@@ -47,6 +47,6 @@ func (s osSystem) ShowUI(ctx context.Context, route string) error {
 	return err
 }
 
-func (s osSystem) FreeDriveLetters() ([]string, error)       { return platform.FreeDriveLetters() }
+func (s osSystem) DriveLettersInUse() (map[string]string, error) { return platform.DriveLettersInUse() }
 func (s osSystem) DownloadsDir() (string, error)             { return platform.DownloadsDir() }
 func (s osSystem) FreeDiskBytes(path string) (uint64, error) { return platform.FreeDiskBytes(path) }

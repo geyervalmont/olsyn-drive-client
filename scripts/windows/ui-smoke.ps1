@@ -234,7 +234,21 @@ try {
   $ok = Wait-Until -Seconds 30 -Test { $r = Invoke-Agent GET '/v1/state' -TimeoutSeconds 3; $script:state = $r.Json; ($r.Json.account -ne $null) -and (@('connected', 'working') -contains $r.Json.connection) }
   Step 'signed in and connected' $ok "connection $($script:state.connection)"
 
+  # first run: nothing is mounted until a letter is chosen; the letter step
+  # suggests a free one (W:, or the next free letter when W: is taken)
+  $r = Invoke-Agent GET '/v1/state'
+  if ($r.Json.mount.letter_confirmed -eq $false) {
+    Step 'not mounted before the letter is chosen' ($r.Json.mount.state -ne 'mounted') "mount $($r.Json.mount.state)"
+  }
+  $r = Invoke-Agent GET '/v1/settings'
+  $letter = $r.Json.choices.suggested_letter
+  Step 'a free drive letter is suggested' ($letter -match '^[D-Z]:$') "suggested '$letter', in use: $($r.Json.choices.letters_in_use | ConvertTo-Json -Compress)"
+  Start-Sleep -Seconds 1
+  Shot '3a-letter-step'
+
   if (Test-Path (Join-Path ${env:ProgramFiles(x86)} 'WinFsp\bin\winfsp-x64.dll')) {
+    $r = Invoke-Agent POST '/v1/mount' ("{""letter"":""$letter""}")
+    Step 'POST /v1/mount with the chosen letter' (@(200, 202) -contains $r.Status) "status $($r.Status) $($r.Body)"
     $ok = Wait-Until -Seconds 45 -Test { $r = Invoke-Agent GET '/v1/state' -TimeoutSeconds 3; $script:state = $r.Json; $r.Json.mount.state -eq 'mounted' }
     Step 'the drive is mounted' $ok "mount $($script:state.mount.state)"
   } else {

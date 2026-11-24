@@ -414,7 +414,14 @@ func (a *Agent) hSettingsPatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Agent) hMount(w http.ResponseWriter, r *http.Request) {
-	m, already, err := a.Mount(r.Context())
+	var body struct {
+		Letter string `json:"letter"`
+	}
+	if err := decode(r, &body); err != nil {
+		a.fail(w, err)
+		return
+	}
+	m, already, err := a.Mount(r.Context(), body.Letter)
 	if err != nil {
 		a.fail(w, err)
 		return
@@ -508,7 +515,7 @@ func (a *Agent) installDriver(ctx context.Context) {
 		}
 		a.driver.Error = &Problem{code, msg}
 	}
-	wantMount := a.mountWanted && a.driver.State == "ok" && a.mount.State != MountMounted && a.phase == phaseRunning
+	wantMount := a.mountWanted && a.letterConfirmed && a.driver.State == "ok" && a.mount.State != MountMounted && a.phase == phaseRunning
 	a.mu.Unlock()
 	if err != nil {
 		a.log.Warn("driver install failed", "err", err)
@@ -662,27 +669,44 @@ func (a *Agent) settingsResponse() SettingsResponse {
 	s, d := a.settings, a.defaults
 	pending := slices.Clone(a.pendingRestart)
 	a.mu.Unlock()
-	letters, err := a.opts.System.FreeDriveLetters()
+	inUse, err := a.opts.System.DriveLettersInUse()
 	if err != nil {
-		a.log.Warn("could not list free drive letters", "err", err)
+		a.log.Warn("could not list drive letters", "err", err)
 	}
-	if len(letters) > 0 && !slices.Contains(letters, s.DriveLetter) {
-		letters = append([]string{s.DriveLetter}, letters...)
-	}
-	if letters == nil {
-		letters = []string{}
+	letters, suggested := []string{}, ""
+	if inUse != nil {
+		a.mu.Lock()
+		mounted := a.mount.State == MountMounted && a.mount.Letter != nil
+		ours := ""
+		if mounted {
+			ours = *a.mount.Letter
+		}
+		a.mu.Unlock()
+		delete(inUse, ours) // our own drive holds it
+		letters = platform.FreeLetters(inUse)
+		if ours != "" && !slices.Contains(letters, ours) {
+			letters = append([]string{ours}, letters...)
+		}
+		suggested = platform.SuggestLetter(s.DriveLetter, inUse)
+	} else {
+		inUse = map[string]string{}
 	}
 	if pending == nil {
 		pending = []string{}
 	}
 	return SettingsResponse{
 		Settings: s, Defaults: d, PendingRestart: pending,
-		Choices: SettingsChoices{DriveLetters: letters, UpdateChannels: []string{"stable", "beta"}},
+		Choices: SettingsChoices{DriveLetters: letters, LettersInUse: inUse, SuggestedLetter: suggested,
+			UpdateChannels: []string{"stable", "beta"}},
 	}
 }
 
 // PatchSettings applies a JSON merge patch, saves, and applies the effects.
 func (a *Agent) PatchSettings(ctx context.Context, patch []byte) (SettingsResponse, error) {
+	inUse, lerr := a.opts.System.DriveLettersInUse()
+	if lerr != nil {
+		a.log.Warn("could not list drive letters", "err", lerr)
+	}
 	a.mu.Lock()
 	old := a.settings
 	next, err := settings.Patch(old, patch)
@@ -703,6 +727,10 @@ func (a *Agent) PatchSettings(ctx context.Context, patch []byte) (SettingsRespon
 		return SettingsResponse{}, newAPIError(409, "already_signed_in", "Sign out before changing the server.")
 	}
 	mounted := a.mount.State == MountMounted
+	if kind := inUse[next.DriveLetter]; has("drive_letter") && kind != "" {
+		a.mu.Unlock()
+		return SettingsResponse{}, &settings.FieldError{Field: "drive_letter", Message: next.DriveLetter + " is already used on this PC by " + letterUser(kind) + "."}
+	}
 	if has("drive_letter") && mounted && a.opts.Mounter.OpenFiles() > 0 {
 		a.mu.Unlock()
 		return SettingsResponse{}, newAPIError(409, "busy", "Close the files open on the drive before changing its letter.")

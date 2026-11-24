@@ -202,7 +202,10 @@ type System interface {
 	DetectDriver() (platform.DriverInfo, error)
 	// InstallDriver runs the bundled, verified driver installer elevated.
 	InstallDriver(ctx context.Context) error
-	FreeDriveLetters() ([]string, error)
+	// DriveLettersInUse maps the letters D: to Z: something holds to what
+	// (platform.LetterVolume, LetterNetwork, LetterSubst); nil where the OS
+	// has no drive letters.
+	DriveLettersInUse() (map[string]string, error)
 	DownloadsDir() (string, error)
 	FreeDiskBytes(path string) (uint64, error)
 	// ShowUI opens the desktop app at a route ("transfers/held"); ErrNoUI

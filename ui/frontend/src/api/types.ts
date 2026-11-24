@@ -60,7 +60,12 @@ export interface Mount {
   letter: string | null
   path: string | null
   error: CodeMessage | null
+  /** false until the person has chosen the letter (first run): the agent does not mount before that. Absent (older agents) means true. */
+  letter_confirmed?: boolean
 }
+
+/** What holds a drive letter on this PC. */
+export type LetterUse = 'volume' | 'network' | 'subst'
 
 export interface Summary {
   active: number
@@ -210,7 +215,15 @@ export interface Settings {
 export interface SettingsResponse {
   settings: Settings
   defaults: Settings
-  choices: { drive_letters: string[]; update_channels: string[] }
+  choices: {
+    /** Letters the drive can use: free ones, plus the current one while mounted there. */
+    drive_letters: string[]
+    /** Other letters and what holds them (absent from older agents). */
+    letters_in_use?: Record<string, LetterUse>
+    /** The configured letter if usable, else the next free one; '' when none or off Windows. */
+    suggested_letter?: string
+    update_channels: string[]
+  }
   pending_restart: string[]
 }
 

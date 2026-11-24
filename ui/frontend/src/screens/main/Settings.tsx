@@ -69,7 +69,8 @@ export function Settings() {
     )
   }
   const s = data.settings
-  const letters = data.choices.drive_letters
+  // the configured letter stays listed even when something else holds it now
+  const letters = data.choices.drive_letters.includes(data.settings.drive_letter) ? data.choices.drive_letters : [data.settings.drive_letter, ...data.choices.drive_letters]
   const pending = data.pending_restart
 
   return (

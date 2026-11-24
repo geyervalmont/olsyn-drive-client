@@ -139,8 +139,9 @@ export class AgentClient {
   }
 
   // Mount
-  mount() {
-    return this.call<{ mount: Mount }>('POST', '/v1/mount', {})
+  /** Connects the drive; letter (optional) is the person's choice, which also confirms it. */
+  mount(letter?: string) {
+    return this.call<{ mount: Mount }>('POST', '/v1/mount', letter ? { letter } : {})
   }
   unmount(force = false) {
     return this.call<{ mount: Mount }>('POST', '/v1/unmount', { force })

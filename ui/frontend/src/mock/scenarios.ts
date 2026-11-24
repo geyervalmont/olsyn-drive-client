@@ -4,6 +4,7 @@ export const scenarios = {
   copy: 'A copy of 3,000 small files and a 3 GB video going up, with realistic speed and time left.',
   'first-run': 'A new PC: welcome, sign in with a code, the driver step, pick a letter, done.',
   signin: 'Signed out on a PC that already has the driver: sign in and pick a letter.',
+  'letter-taken': 'A new PC where W: is a remembered network drive: sign in, and the letter step picks X: and says why.',
   'link-expired': 'Sign-in where the code runs out before the browser approves it.',
   restart: 'A copy in progress when the drive restarts: uploads wait, then carry on.',
   offline: 'The drive cannot be reached; saved files wait on this PC.',

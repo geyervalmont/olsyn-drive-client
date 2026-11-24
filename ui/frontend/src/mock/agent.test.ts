@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SSEMessage } from '../api/sse'
-import type { State, Summary, Transfer, TransferPage } from '../api/types'
+import type { SettingsResponse, State, Summary, Transfer, TransferPage } from '../api/types'
 import { MockAgent } from './agent'
 
 const NOW = Date.parse('2026-11-24T03:00:00.000Z')
@@ -80,6 +80,22 @@ describe('MockAgent', () => {
     expect((await agent.handle('POST', '/v1/held/' + refused.id + '/reupload')).status).toBe(409)
     expect((await body<{ queued: boolean }>(agent, 'POST', '/v1/held/' + damaged.id + '/reupload')).queued).toBe(true)
     expect(agent.state().transfers.held).toBe(1)
+  })
+
+  it('refuses a taken letter and confirms a free one', async () => {
+    const agent = make('letter-taken')
+    await body(agent, 'POST', '/v1/signin', { open_browser: false })
+    agent.tick(8)
+    expect(agent.state().mount.letter_confirmed).toBe(false)
+    const set = await body<SettingsResponse>(agent, 'GET', '/v1/settings')
+    expect(set.choices.suggested_letter).toBe('X:')
+    expect(set.choices.letters_in_use).toMatchObject({ 'W:': 'network', 'O:': 'network' })
+    expect(set.choices.drive_letters).not.toContain('W:')
+    const taken = await agent.handle('POST', '/v1/mount', { letter: 'W:' })
+    expect(taken.status).toBe(409)
+    expect((await agent.handle('POST', '/v1/mount', { letter: 'x' })).status).toBe(202)
+    agent.tick(2)
+    expect(agent.state().mount).toMatchObject({ state: 'mounted', letter: 'X:', letter_confirmed: true })
   })
 
   it('signs in with a code, then approves', async () => {

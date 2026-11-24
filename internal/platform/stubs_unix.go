@@ -34,5 +34,5 @@ func DetectDriver() (DriverInfo, error) { return DriverInfo{Name: "", Needed: fa
 // InstallDriver is Windows only.
 func InstallDriver(context.Context, string, string, string) error { return ErrNotImplemented }
 
-// FreeDriveLetters is empty outside Windows.
-func FreeDriveLetters() ([]string, error) { return nil, nil }
+// DriveLettersInUse is nil outside Windows: there are no drive letters.
+func DriveLettersInUse() (map[string]string, error) { return nil, nil }
