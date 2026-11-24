@@ -72,6 +72,8 @@ export interface Summary {
   waiting: number
   held: number
   files_left: number
+  /** Uploads finished since the queue was last empty ("3 of 120"). Absent from agents older than 1.2. */
+  files_done?: number
   bytes_total: number
   bytes_done: number
   up_bps: number

@@ -168,7 +168,7 @@ func ownExecutable() (string, error) {
 // with --interactive, without the person agreeing in a dialog).
 func cmdUninstall(e *env, args []string) int {
 	fs := newFlags(e, "uninstall")
-	keep := fs.Bool("keep-cache", false, "keep settings and the cache (files not yet sent go on after a reinstall)")
+	keep := fs.Bool("keep-cache", false, "keep settings and the cache (files not yet uploaded go up after a reinstall)")
 	yes := fs.Bool("yes", false, "delete files that have not reached the drive")
 	interactive := fs.Bool("interactive", false, "ask in dialogs (Settings > Apps runs this)")
 	fs.Bool("purge", true, "accepted for older scripts; deleting the data is the default")
@@ -179,7 +179,7 @@ func cmdUninstall(e *env, args []string) int {
 		if !askOKCancel("Uninstall Olsyn Drive", "Remove Olsyn Drive from this PC?\n\nYour files on the drive are not affected.") {
 			return exitOK
 		}
-		*keep = askYesNo("Uninstall Olsyn Drive", "Keep the copies of drive files on this PC, for a later reinstall?\n\nChoose No to delete them; they stay on the drive.", false)
+		*keep = askYesNo("Uninstall Olsyn Drive", "Keep the recently opened drive files on this PC, for a later reinstall?\n\nChoose No to delete them from this PC; the drive keeps its copy.", false)
 	}
 	if !*keep {
 		err := signOutClearing(e, *yes)
@@ -189,7 +189,7 @@ func cmdUninstall(e *env, args []string) int {
 				e.errorf("olsyn-drive: %s\nRun again with --yes to delete them, or with --keep-cache to keep them.\n", ae.Message)
 				return exitNeedsInput
 			}
-			if askYesNo("Uninstall Olsyn Drive", ae.Message+"\n\nDelete them anyway? Choose No to keep them on this PC; they are sent when Olsyn Drive is installed again.", false) {
+			if askYesNo("Uninstall Olsyn Drive", ae.Message+"\n\nDelete them anyway? Choose No to keep them on this PC; they upload when Olsyn Drive is installed again.", false) {
 				err = signOutClearing(e, true)
 			} else {
 				*keep, err = true, nil

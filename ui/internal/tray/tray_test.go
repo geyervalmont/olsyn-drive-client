@@ -23,14 +23,14 @@ func TestFromState(t *testing.T) {
 		kind Kind
 		tip  string
 	}{
-		{"idle", func(*agentconn.State) {}, Idle, "up to date on W:"},
+		{"idle", func(*agentconn.State) {}, Idle, "Olsyn Drive (W:): all changes are uploaded"},
 		{"signed out", func(s *agentconn.State) { s.Account = nil; s.Connection = "signed_out" }, Attention, "sign in"},
-		{"held wins over syncing", func(s *agentconn.State) { s.Transfers = agentconn.Summary{Active: 3, Held: 2} }, Attention, "2 files could not be sent"},
+		{"held wins over syncing", func(s *agentconn.State) { s.Transfers = agentconn.Summary{Active: 3, Held: 2} }, Attention, "2 files could not be uploaded"},
 		{"paused", func(s *agentconn.State) { s.Paused = true; s.Transfers.FilesLeft = 4 }, Paused, "paused with 4 files waiting"},
 		{"offline", func(s *agentconn.State) { s.Connection = "offline"; s.Transfers.FilesLeft = 1 }, Offline, "1 file waiting"},
 		{"syncing", func(s *agentconn.State) {
 			s.Transfers = agentconn.Summary{Active: 2, FilesLeft: 5, BytesTotal: 200, BytesDone: 50, EtaSeconds: &eta}
-		}, Syncing, "5 files left, 25% done, about 10 minutes"},
+		}, Syncing, "uploading, 5 files left, 25% done, about 10 minutes"},
 		{"issue", func(s *agentconn.State) {
 			s.Issues = []agentconn.Issue{{Code: "driver_missing", Message: "The drive needs a one-time install."}}
 		}, Attention, "one-time install"},

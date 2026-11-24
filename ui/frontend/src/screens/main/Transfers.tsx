@@ -17,9 +17,9 @@ export type TransferTab = 'active' | 'waiting' | 'held' | 'done' | 'skipped' | '
 export const transferTabs: TransferTab[] = ['active', 'waiting', 'held', 'done', 'skipped', 'failed']
 
 const empty: Record<Exclude<TransferTab, 'held'>, { title: string; body: string }> = {
-  active: { title: 'Nothing is going up right now.', body: 'Files you save on the drive letter, or send from here, show their progress in this tab.' },
+  active: { title: 'Nothing is uploading right now.', body: 'Files you save on the drive letter, or send from here, show their progress in this tab.' },
   waiting: { title: 'Nothing is waiting.', body: 'When several files are saved at once, the ones not yet started line up here.' },
-  done: { title: 'Nothing sent yet.', body: 'Files show up here once they are safely on the drive.' },
+  done: { title: 'Nothing uploaded yet.', body: 'Files show up here once the drive has them.' },
   skipped: { title: 'Nothing skipped.', body: 'Files that are already on the drive, and Windows system files like Thumbs.db, are listed here instead of being sent twice.' },
   failed: { title: 'Nothing failed.', body: 'Files that could not be sent after several tries show up here with a Try again button.' },
 }
@@ -50,7 +50,7 @@ export function Transfers({ tab, onTab, onSend }: { tab: TransferTab; onTab: (ta
     { key: 'done', label: 'Done', count: counts?.done },
     { key: 'skipped', label: 'Already there', count: counts?.skipped },
   ]
-  if ((counts?.failed ?? 0) > 0 || tab === 'failed') items.push({ key: 'failed', label: 'Not sent', count: counts?.failed })
+  if ((counts?.failed ?? 0) > 0 || tab === 'failed') items.push({ key: 'failed', label: 'Not uploaded', count: counts?.failed })
 
   const titleId = useId()
   return (
@@ -144,8 +144,8 @@ export function SummaryStrip() {
           </>
         ) : (
           <>
-            <p className="summary-title">Nothing to send.</p>
-            <p className="summary-meta">Everything saved on {state.mount.letter ?? 'the drive'} is on the drive.</p>
+            <p className="summary-title">All changes are uploaded</p>
+            <p className="summary-meta">Nothing saved on {state.mount.letter ?? 'the drive letter'} is waiting to upload.</p>
           </>
         )}
       </div>

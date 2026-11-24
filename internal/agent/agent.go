@@ -388,7 +388,7 @@ func (a *Agent) issuesLocked(fs FSStatus) []Issue {
 		return issues
 	}
 	if n := fs.Summary.Held; n > 0 {
-		issues = append(issues, Issue{"held_files", plural(n, "file", "files") + " could not be saved to the drive.", "show_held"})
+		issues = append(issues, Issue{"held_files", plural(n, "file", "files") + " could not be uploaded to the drive.", "show_held"})
 	}
 	if a.mount.State == MountFailed {
 		msg := "The drive could not be connected."
@@ -412,7 +412,7 @@ func (a *Agent) issuesLocked(fs FSStatus) []Issue {
 		issues = append(issues, Issue{"update_failed", a.update.Error.Message, "check_update"})
 	}
 	if fs.CacheFull {
-		issues = append(issues, Issue{"cache_full", "The cache is full of files not yet sent; saving is slowed to upload speed.", "show_settings"})
+		issues = append(issues, Issue{"cache_full", "Files waiting to upload fill the space set aside on this PC; saving slows to upload speed until they are uploaded.", "show_settings"})
 	}
 	return issues
 }

@@ -70,7 +70,7 @@ Usage: olsyn-drive <command> [options]
   install --user        install for this user (no administrator needed)
   uninstall [--keep-cache] [--yes]
                         remove this program and its data (--keep-cache keeps
-                        settings, cache and files not yet sent)
+                        settings, cache and files not yet uploaded)
 
 Environment: OLSYN_DRIVE_HOME puts every file under one folder (portable or test runs).
 `
@@ -156,7 +156,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		if err := stopAgent(e); err != nil {
 			return e.report(err)
 		}
-		e.printf("The agent is stopped (saves not yet on the drive stay queued for its next start).\n")
+		e.printf("The agent is stopped (changes not yet uploaded stay queued for its next start).\n")
 		return exitOK
 	case "version", "--version", "-v":
 		return cmdVersion(e, rest)

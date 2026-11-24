@@ -463,13 +463,13 @@ func (s *sends) notifyFinished(b agent.Batch) {
 	}
 	left := b.FilesHeld + b.FilesFailed + b.NotLocal
 	if left > 0 {
-		s.f.signal(agent.FSEvent{Notification: &agent.Notification{Kind: "held", Title: plural(left, "file") + " not sent to " + where,
-			Body:   "The others are on the drive. The list says why for each one.",
+		s.f.signal(agent.FSEvent{Notification: &agent.Notification{Kind: "held", Title: plural(left, "file") + " not uploaded to " + where,
+			Body:   "The others are uploaded. The list says why for each one.",
 			Action: &agent.NotificationAction{Label: "Show", Open: agent.OpenAction{Target: "ui", Path: "transfers/held"}}}})
 		return
 	}
-	s.f.signal(agent.FSEvent{Notification: &agent.Notification{Kind: "finished", Title: "Sent " + plural(b.FilesDone+b.FilesSkipped, "file") + " to " + where,
-		Body: "Everything is on the drive."}})
+	s.f.signal(agent.FSEvent{Notification: &agent.Notification{Kind: "finished", Title: "Uploaded " + plural(b.FilesDone+b.FilesSkipped, "file") + " to " + where,
+		Body: "All of them are on the drive. The originals on this PC are unchanged."}})
 }
 
 func plural(n int, what string) string {

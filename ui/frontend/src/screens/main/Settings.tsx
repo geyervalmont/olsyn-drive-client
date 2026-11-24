@@ -3,6 +3,7 @@ import type { CacheState, CacheUsage, SettingsPatch, SettingsResponse } from '..
 import { AgentError } from '../../api/errors'
 import { formatBytes, formatLimit } from '../../lib/format'
 import { errorText, useAgentContext, useAgentView } from '../../state/context'
+import { cacheExplainer } from '../../state/derive'
 import { Truncate } from '../../ui/FileName'
 import { Spinner } from '../../ui/Progress'
 import { Button, Field, InlineError, Switch } from '../../ui/controls'
@@ -11,8 +12,6 @@ const GB = 1024 * 1024 * 1024
 const MB = 1024 * 1024
 const cacheSizes = [1, 2, 5, 10, 25, 50, 100, 200, 500].map((g) => g * GB)
 
-/** The one-line answer to "is the drive filling up this PC?" (also shown on first run). */
-export const cacheExplainer = 'Files live on the Olsyn drive. This PC keeps only what you opened recently and what is still uploading.'
 const limits = [0, 1, 2, 5, 10, 25, 50, 100].map((m) => m * MB)
 
 const fieldOf = (err: unknown): string | null => (err instanceof AgentError && typeof err.detail.field === 'string' ? err.detail.field : null)
@@ -299,7 +298,7 @@ function OldCacheBar({ usage, cap }: { usage: CacheUsage; cap: number }) {
         {usage.unsent_bytes > 0 && (
           <span>
             <span className="swatch swatch-unsent" aria-hidden="true" />
-            {formatBytes(usage.unsent_bytes)} not sent yet
+            {formatBytes(usage.unsent_bytes)} waiting to upload
           </span>
         )}
         <span className="muted">{formatBytes(usage.disk_free_bytes)} free on the disk</span>

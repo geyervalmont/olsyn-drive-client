@@ -85,7 +85,7 @@ export function Popover() {
         <section className="pop-section" aria-label="Recently finished">
           <h2 className="pop-section-title">Recent</h2>
           {view.recent.length === 0 ? (
-            <p className="pop-empty">Files you save on {letter} show up here once they are on the drive.</p>
+            <p className="pop-empty">Files you save on {letter} show up here once they are uploaded.</p>
           ) : (
             <ul className="pop-list">
               {view.recent.slice(0, 5).map((t) => (

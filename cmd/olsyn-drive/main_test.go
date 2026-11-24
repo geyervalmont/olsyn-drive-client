@@ -33,7 +33,7 @@ func sampleState() agent.State {
 
 func TestFormatStatus(t *testing.T) {
 	out := formatStatus(sampleState())
-	for _, want := range []string{"Olsyn Drive 1.4.2", "Working", "<person@example.test> on drive.example.test", "W: mounted",
+	for _, want := range []string{"Olsyn Drive 1.4.2", "Uploading", "<person@example.test> on drive.example.test", "W: mounted",
 		"2 active, 14 waiting, 1 held", "WinFsp 2.2.25089", "1 file could not be saved"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status lacks %q:\n%s", want, out)

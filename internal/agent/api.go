@@ -89,10 +89,13 @@ type Mount struct {
 
 // Summary is the overall transfer progress.
 type Summary struct {
-	Active     int    `json:"active"`
-	Waiting    int    `json:"waiting"`
-	Held       int    `json:"held"`
-	FilesLeft  int    `json:"files_left"`
+	Active    int `json:"active"`
+	Waiting   int `json:"waiting"`
+	Held      int `json:"held"`
+	FilesLeft int `json:"files_left"`
+	// FilesDone counts uploads finished since the queue was last empty,
+	// so the UI can say "3 of 120". Agents before 1.2 leave it 0.
+	FilesDone  int    `json:"files_done"`
 	BytesTotal int64  `json:"bytes_total"`
 	BytesDone  int64  `json:"bytes_done"`
 	UpBPS      int64  `json:"up_bps"`

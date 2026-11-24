@@ -108,6 +108,8 @@ export class MockAgent {
   private history: string[] = []
   private nextId = 1
   private workTotal = 0
+  // files finished since the queue was last empty ("3 of 120")
+  private filesDoneRun = 0
   private workDone = 0
   private rate = 0
   private activity: AgentNotification[] = []
@@ -360,7 +362,7 @@ export class MockAgent {
       t.bytes_done = 0
       this.held.unshift(t.id)
     }
-    this.addActivity('held', "Couldn't save 4 files", 'The drive refused them. They are safe on this PC.', { label: 'Show', open: { target: 'ui', path: 'transfers/held' } })
+    this.addActivity('held', "Couldn't save 4 files", 'The drive refused them. They are kept on this PC, not on the drive.', { label: 'Show', open: { target: 'ui', path: 'transfers/held' } })
   }
 
   private seedConflict() {
@@ -475,6 +477,7 @@ export class MockAgent {
     t.bytes_done = t.size
     t.can = { retry: false, cancel: false }
     this.queue = this.queue.filter((id) => id !== t.id)
+    this.filesDoneRun = this.queue.length > 0 ? this.filesDoneRun + 1 : 0
     this.history.unshift(t.id)
     if (this.history.length > HISTORY_LIMIT) {
       for (const old of this.history.splice(HISTORY_LIMIT)) this.transfers.delete(old)
@@ -484,7 +487,7 @@ export class MockAgent {
       const files = this.history.filter((id) => this.transfers.get(id)?.state === 'done').length
       this.workTotal = 0
       this.workDone = 0
-      this.notify('finished', 'Everything is on the drive', plural(files, 'file') + ' sent.', { label: 'Open W:', open: { target: 'drive', path: '/' } })
+      this.notify('finished', 'All changes are uploaded', plural(files, 'file') + ' uploaded. This PC keeps only what you opened recently.', { label: 'Open W:', open: { target: 'drive', path: '/' } })
     }
   }
 
@@ -529,6 +532,7 @@ export class MockAgent {
       waiting: this.queue.length - active,
       held: this.held.length,
       files_left: this.queue.length,
+      files_done: this.queue.length > 0 ? this.filesDoneRun : 0,
       bytes_total: Math.round(this.workTotal),
       bytes_done: Math.round(Math.min(this.workDone, this.workTotal)),
       up_bps: moving ? Math.round(this.rate) : 0,

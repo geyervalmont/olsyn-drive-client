@@ -40,7 +40,7 @@ export function QuitDialog({ onClose }: { onClose: () => void }) {
       }
     >
       <p>Closing the app hides the tray icon; {letter} stays and files keep going up.</p>
-      <p>Disconnecting removes {letter} from File Explorer until you start Olsyn Drive again.{left > 0 ? ' ' + plural(left, 'file') + ' still to send will wait on this PC.' : ''}</p>
+      <p>Disconnecting removes {letter} from File Explorer until you start Olsyn Drive again.{left > 0 ? ' ' + plural(left, 'file') + ' still to upload will wait on this PC.' : ''}</p>
       {error && <p className="field-error" role="alert">{error.message}</p>}
     </Dialog>
   )

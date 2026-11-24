@@ -44,7 +44,7 @@ export function useBanners(navigate: (route: string) => void): BannerModel[] {
       tone: 'info',
       icon: 'offline',
       title: "You're offline.",
-      body: 'Files you save stay on this PC and go up when the drive is back.',
+      body: 'Files you save wait on this PC and upload when the drive is back.',
     })
   }
   if (state.connection === 'server_restarting') {
@@ -70,7 +70,7 @@ export function useBanners(navigate: (route: string) => void): BannerModel[] {
   if (state.paused && state.connection !== 'offline') {
     const until = state.paused_until
       ? 'Uploads start again at ' + new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date(state.paused_until)) + '.'
-      : 'Nothing goes up until you resume.'
+      : 'Nothing uploads until you resume.'
     banners.push({ key: 'paused', tone: 'quiet', icon: 'pause', title: 'Uploads are paused.', body: until, action: { label: 'Resume', run: () => client.resume() } })
   }
   if (state.update.state === 'ready' && !state.issues.some((i) => i.code === 'update_required')) {
@@ -90,7 +90,7 @@ function issueBanner(issue: Issue, client: ReturnType<typeof useAgentContext>['c
   const base = { key: 'issue-' + issue.code, tone: 'warn' as const, icon: 'alert' as IconName, title: issue.message }
   switch (issue.action) {
     case 'show_held':
-      return { ...base, icon: 'hold', body: 'They are safe on this PC. Choose what to do with each one.', action: { label: 'Show files', run: () => navigate('transfers/held') } }
+      return { ...base, icon: 'hold', body: 'They are kept on this PC, not on the drive. Choose what to do with each one.', action: { label: 'Show files', run: () => navigate('transfers/held') } }
     case 'install_driver':
       return { ...base, icon: 'shield', body: 'Windows will ask for permission once.', action: { label: 'Install', run: () => client.installDriver() } }
     case 'mount':

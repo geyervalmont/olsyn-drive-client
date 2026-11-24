@@ -34,7 +34,7 @@ export function HeldList({ items, labelledBy }: { items: Transfer[]; labelledBy?
   if (items.length === 0) {
     return (
       <EmptyState icon="hold" title="Nothing is held.">
-        If the drive refuses a file, it waits here with what happened and what you can do. It stays safe on this PC until you decide.
+        If the drive refuses a file, it waits here with what happened and what you can do. It is kept on this PC, not on the drive, until you decide.
       </EmptyState>
     )
   }

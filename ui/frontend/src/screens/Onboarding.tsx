@@ -6,6 +6,7 @@ import type { DriverProgress, SettingsResponse } from '../api/types'
 import { formatCountdown, secondsUntil } from '../lib/format'
 import { useNow } from '../lib/useNow'
 import { errorText, useAction, useAgentContext, useAgentView } from '../state/context'
+import { cacheExplainer } from '../state/derive'
 import { Icon } from '../ui/Icon'
 import { LetterMark } from '../ui/LetterMark'
 import { Spinner } from '../ui/Progress'
@@ -77,7 +78,7 @@ function Welcome({ onNext }: { onNext: () => void }) {
       <h1 id="onboarding-title" className="onb-title display">
         Your Olsyn drive, as a drive on this PC.
       </h1>
-      <p className="onb-lead">Open, save and drag files on W: like any other drive. They go up to the Olsyn drive by themselves, and everyone on the project sees them.</p>
+      <p className="onb-lead">Open, save and drag files on W: like any other drive. They upload to the Olsyn drive by themselves, and everyone on the project sees them.</p>
       {reason && reason.code !== 'signed_out' && <p className="onb-note">{reason.message}</p>}
       <div className="onb-actions">
         <Button variant="primary" size="l" onClick={onNext} data-autofocus>
@@ -469,6 +470,7 @@ function DoneStep({ onDone }: { onDone: () => void }) {
         Your drive is {letter}
       </h1>
       <p className="onb-lead">Look for Olsyn Drive ({letter}) in File Explorer. Olsyn Drive keeps working from the tray, next to the clock.</p>
+      <p className="onb-fine">{cacheExplainer}</p>
       {error && <InlineError message={error.message} />}
       <div className="onb-actions">
         <Button

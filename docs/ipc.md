@@ -94,7 +94,7 @@ other keys are extra detail named per code below.
   "paused": false,
   "paused_until": null,
   "transfers": {
-    "active": 2, "waiting": 14, "held": 2, "files_left": 16,
+    "active": 2, "waiting": 14, "held": 2, "files_left": 16, "files_done": 104,
     "bytes_total": 734003200, "bytes_done": 123731968,
     "up_bps": 10485760, "down_bps": 0, "eta_seconds": 58
   },
@@ -157,12 +157,13 @@ The device code is the agent's secret and never crosses this API.
 ### Summary
 
 ```json
-{"active": 2, "waiting": 14, "held": 2, "files_left": 16, "bytes_total": 734003200, "bytes_done": 123731968,
+{"active": 2, "waiting": 14, "held": 2, "files_left": 16, "files_done": 104, "bytes_total": 734003200, "bytes_done": 123731968,
  "up_bps": 10485760, "down_bps": 0, "eta_seconds": 58}
 ```
 
 Covers active + waiting work (bytes of done files drop out once the queue empties). `eta_seconds` is `null`
-when unknown. `files_left` = active + waiting.
+when unknown. `files_left` = active + waiting. `files_done` (agent 1.2): uploads finished since the queue was last
+empty, so the UI can say "Uploading 105 of 120"; 0 when idle.
 
 ### Transfer
 

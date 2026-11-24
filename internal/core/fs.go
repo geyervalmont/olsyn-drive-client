@@ -421,11 +421,12 @@ func (f *FS) maybeFinished(r *session) {
 	if n == 0 {
 		return
 	}
-	title := "Saved 1 file to the drive"
+	title := "Uploaded 1 file"
 	if n > 1 {
-		title = fmt.Sprintf("Saved %d files to the drive", n)
+		title = fmt.Sprintf("Uploaded %d files", n)
 	}
-	f.signal(agent.FSEvent{Notification: &agent.Notification{Kind: "finished", Title: title, Body: "Everything on this PC is on the drive."}})
+	f.signal(agent.FSEvent{Notification: &agent.Notification{Kind: "finished", Title: title,
+		Body: "All changes are uploaded. This PC keeps only what you opened recently."}})
 	f.signal(agent.FSEvent{StatusChanged: true})
 }
 
@@ -598,9 +599,17 @@ func (f *FS) summary(r *session) (agent.Summary, agent.Unsent) {
 	for _, b := range r.sends.list() {
 		if b.FinishedAt == nil {
 			s.UpBPS += b.BPS
+			s.FilesDone += b.FilesDone + b.FilesSkipped
 		}
 	}
 	s.FilesLeft = s.Active + s.Waiting
+	f.mu.Lock()
+	if s.FilesLeft > 0 {
+		s.FilesDone += r.synced
+	} else {
+		s.FilesDone = 0
+	}
+	f.mu.Unlock()
 	if bps > 0 && s.BytesTotal > s.BytesDone {
 		eta := (s.BytesTotal - s.BytesDone) / bps
 		s.ETASeconds = &eta

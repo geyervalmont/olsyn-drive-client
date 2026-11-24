@@ -40,15 +40,15 @@ func FromState(s agentconn.State) View {
 	case s.Connection == "token_revoked":
 		return View{Kind: Attention, Progress: -1, Tooltip: "Olsyn Drive: sign in again to keep working"}
 	case t.Held > 0:
-		return View{Kind: Attention, Progress: -1, Tooltip: fmt.Sprintf("Olsyn Drive: %s could not be sent", files(t.Held))}
+		return View{Kind: Attention, Progress: -1, Tooltip: fmt.Sprintf("Olsyn Drive: %s could not be uploaded", files(t.Held))}
 	case len(s.Issues) > 0:
 		return View{Kind: Attention, Progress: -1, Tooltip: tip("Olsyn Drive: " + s.Issues[0].Message)}
 	case s.Paused:
 		return View{Kind: Paused, Progress: -1, Tooltip: pausedTip(t)}
 	case s.Connection == "offline" || s.Connection == "connecting":
-		msg := "Olsyn Drive: offline, working from this PC"
+		msg := "Olsyn Drive: offline, changes wait on this PC"
 		if t.FilesLeft > 0 {
-			msg = fmt.Sprintf("Olsyn Drive: offline, %s waiting to send", files(t.FilesLeft))
+			msg = fmt.Sprintf("Olsyn Drive: offline, %s waiting to upload", files(t.FilesLeft))
 		}
 		return View{Kind: Offline, Progress: -1, Tooltip: msg}
 	case s.Connection == "restarting":
@@ -77,13 +77,13 @@ func fraction(t agentconn.Summary) float64 {
 
 func idleTip(s agentconn.State) string {
 	if s.Mount.Letter != nil && *s.Mount.Letter != "" {
-		return tip(fmt.Sprintf("Olsyn Drive: up to date on %s:", strings.TrimSuffix(*s.Mount.Letter, ":")))
+		return tip(fmt.Sprintf("Olsyn Drive (%s:): all changes are uploaded", strings.TrimSuffix(*s.Mount.Letter, ":")))
 	}
-	return "Olsyn Drive: up to date"
+	return "Olsyn Drive: all changes are uploaded"
 }
 
 func syncingTip(t agentconn.Summary) string {
-	parts := []string{fmt.Sprintf("Olsyn Drive: %s left", files(max(t.FilesLeft, t.Active)))}
+	parts := []string{fmt.Sprintf("Olsyn Drive: uploading, %s left", files(max(t.FilesLeft, t.Active)))}
 	if f := fraction(t); f >= 0 {
 		parts = append(parts, fmt.Sprintf("%d%% done", int(f*100)))
 	}
@@ -95,7 +95,7 @@ func syncingTip(t agentconn.Summary) string {
 
 func pausedTip(t agentconn.Summary) string {
 	if t.FilesLeft > 0 {
-		return tip(fmt.Sprintf("Olsyn Drive: paused with %s waiting", files(t.FilesLeft)))
+		return tip(fmt.Sprintf("Olsyn Drive: paused with %s waiting to upload", files(t.FilesLeft)))
 	}
 	return "Olsyn Drive: paused"
 }

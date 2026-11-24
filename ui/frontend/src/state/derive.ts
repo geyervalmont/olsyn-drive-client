@@ -20,20 +20,29 @@ export interface StatusLine {
 const timeOnly = (iso: string) =>
   new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date(iso))
 
+/** The one-line answer to "is the drive filling up this PC?": first run and Settings. */
+export const cacheExplainer = 'Files live on the Olsyn drive. This PC keeps only what you opened recently and what is still uploading.'
+
+/** "Uploading 3 of 120 · 1.2 GB left" (agents before 1.2 have no files_done: "Uploading 120 files · …"). */
+export function uploadingTitle(s: State['transfers']): string {
+  const left = formatBytes(Math.max(0, s.bytes_total - s.bytes_done)) + ' left'
+  if (s.files_done === undefined) return 'Uploading ' + plural(s.files_left, 'file') + ' · ' + left
+  const total = s.files_done + s.files_left
+  return 'Uploading ' + Math.min(s.files_done + 1, total).toLocaleString('en-US') + ' of ' + total.toLocaleString('en-US') + ' · ' + left
+}
+
 export function workingLine(state: State): StatusLine {
   const s = state.transfers
-  const left = Math.max(0, s.bytes_total - s.bytes_done)
   const progress = s.bytes_total > 0 ? Math.min(1, s.bytes_done / s.bytes_total) : null
-  const sending = s.up_bps > 0 || s.down_bps === 0
-  const verb = sending ? 'Sending' : 'Fetching'
+  if (s.files_left === 0) {
+    // only reads: files opened on this PC coming down from the drive
+    return { tone: 'busy', title: 'Opening files from the drive', detail: s.down_bps > 0 ? 'Fetching what you opened.' : 'Finishing up.', progress }
+  }
   const eta = formatTimeLeft(s.eta_seconds)
-  const detail = [formatBytes(left) + ' to go', eta ? eta.charAt(0).toLowerCase() + eta.slice(1) : '']
-    .filter(Boolean)
-    .join(', ')
   return {
     tone: 'busy',
-    title: verb + ' ' + plural(s.files_left, 'file') + '.',
-    detail: s.files_left > 0 ? detail + '.' : 'Finishing up.',
+    title: uploadingTitle(s),
+    detail: eta ? eta + '.' : 'Files stay on this PC until they are uploaded.',
     progress,
   }
 }
@@ -62,8 +71,8 @@ export function statusLine(view: AgentView): StatusLine {
         tone: 'off',
         title: "Can't reach the drive.",
         detail: state.transfers.files_left > 0
-          ? plural(state.transfers.files_left, 'file') + ' will go up when you are back online.'
-          : 'Files you save stay on this PC until you are back online.',
+          ? plural(state.transfers.files_left, 'file') + ' will upload when you are back online.'
+          : 'Files you save wait on this PC and upload when you are back online.',
         progress: null,
       }
     case 'server_restarting':
@@ -88,7 +97,7 @@ export function statusLine(view: AgentView): StatusLine {
     case 'connected':
       return {
         tone: 'ok',
-        title: 'Everything is on the drive.',
+        title: 'All changes are uploaded',
         detail: state.mount.state === 'mounted' ? letter + ' is ready.' : 'The drive is not connected to a letter.',
         progress: null,
       }

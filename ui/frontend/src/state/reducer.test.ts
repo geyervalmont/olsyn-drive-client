@@ -3,6 +3,7 @@ import type { IncomingEvent } from '../api/types'
 import { state, summary, transfer } from '../test/fixtures'
 import { initialView, reduce, RECENT_LIMIT, type AgentView } from './reducer'
 import { statusLine } from './derive'
+import { formatBytes } from '../lib/format'
 import { applyToList } from './useTransferList'
 
 const ev = (e: Omit<IncomingEvent, 'id'> & { id?: string }): { type: 'event'; event: IncomingEvent; at: number } => ({
@@ -105,11 +106,13 @@ describe('reducer', () => {
 
 describe('statusLine', () => {
   it('says what is happening in plain words', () => {
-    expect(statusLine(snap()).title).toBe('Everything is on the drive.')
+    expect(statusLine(snap()).title).toBe('All changes are uploaded')
     const working = statusLine(snap({ connection: 'working', transfers: summary({ files_left: 16, active: 2, bytes_total: 2000, bytes_done: 500, up_bps: 100, eta_seconds: 58 }) }))
-    expect(working.title).toBe('Sending 16 files.')
-    expect(working.detail).toMatch(/to go, about 1 minute left/)
+    expect(working.title).toBe('Uploading 16 files · ' + formatBytes(1500) + ' left') // an agent without files_done
+    expect(working.detail).toBe('About 1 minute left.')
     expect(working.progress).toBe(0.25)
+    const counted = statusLine(snap({ connection: 'working', transfers: summary({ files_left: 118, files_done: 2, bytes_total: 1.4e9, bytes_done: 0.2e9 }) }))
+    expect(counted.title).toBe('Uploading 3 of 120 · ' + formatBytes(1.2e9) + ' left')
     expect(statusLine(snap({ connection: 'offline' })).title).toBe("Can't reach the drive.")
     expect(statusLine(snap({ connection: 'signed_out', account: null, reason: { code: 'token_revoked', message: '' } })).title).toBe('Signed out by the drive.')
     expect(statusLine({ ...initialView, stream: 'unreachable' }).tone).toBe('danger')

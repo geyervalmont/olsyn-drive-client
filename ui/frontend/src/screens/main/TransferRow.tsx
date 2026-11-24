@@ -53,11 +53,11 @@ export function TransferRow({ t, now }: { t: Transfer & { receivedAt?: number };
   } else if (t.state === 'done') {
     right = <p className="trow-meta">{(t.direction === 'up' ? 'Sent ' : 'Fetched ') + formatWhen(t.finished_at, now).replace(/^[A-Z]/, (c) => c.toLowerCase())}</p>
   } else if (t.state === 'skipped') {
-    right = <p className="trow-meta">{t.skipped_reason === 'junk' ? 'Windows system file, kept on this PC' : 'Already on the drive'}</p>
+    right = <p className="trow-meta">{t.skipped_reason === 'junk' ? 'Windows system file, not uploaded' : 'Already on the drive'}</p>
   } else if (t.state === 'cancelled') {
     right = <p className="trow-meta">Cancelled</p>
   } else if (t.state === 'failed') {
-    right = <p className="trow-meta tone-danger">Not sent</p>
+    right = <p className="trow-meta tone-danger">Not uploaded</p>
   }
 
   return (

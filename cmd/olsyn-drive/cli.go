@@ -66,8 +66,8 @@ var connectionWords = map[string]string{
 	agent.ConnServerRestarting: "The drive is restarting; waiting",
 	agent.ConnAttention:        "Needs attention",
 	agent.ConnPaused:           "Paused",
-	agent.ConnWorking:          "Working",
-	agent.ConnConnected:        "Connected, everything up to date",
+	agent.ConnWorking:          "Uploading",
+	agent.ConnConnected:        "Connected. All changes are uploaded",
 }
 
 // formatStatus is the human summary of State.
@@ -129,6 +129,10 @@ func formatStatus(st agent.State) string {
 		row("Transfers", line)
 	} else {
 		row("Transfers", "none")
+	}
+	if c := st.Cache; c.UsedBytes > 0 {
+		row("This PC", fmt.Sprintf("%s kept (%s waiting to upload, %s just uploaded, %s recently opened); files live on the drive",
+			humanBytes(c.UsedBytes), humanBytes(c.UnsentBytes), humanBytes(c.UploadedBytes), humanBytes(c.OpenedBytes)))
 	}
 	if st.Paused && st.PausedUntil != nil {
 		row("Paused", "until "+st.PausedUntil.Local().Format("15:04"))
@@ -360,7 +364,7 @@ func cmdLogout(e *env, args []string) int {
 		e.printf("%s\n", *res.UnlinkError)
 	}
 	if res.UnsentKept != nil {
-		e.printf("%d files not yet on the drive are kept on this computer and will be sent if you sign in again.\n", res.UnsentKept.Files)
+		e.printf("%d files not yet uploaded stay on this PC and upload if you sign in again.\n", res.UnsentKept.Files)
 	}
 	if res.CacheCleared {
 		e.printf("The local cache was deleted.\n")
@@ -412,7 +416,7 @@ func cmdResume(e *env, args []string) int {
 func cmdSend(e *env, args []string) int {
 	fs := newFlags(e, "send")
 	to := fs.String("to", "", "drive folder to send into, e.g. /Projects/Tower")
-	wait := fs.Bool("wait", false, "wait until everything has been sent, showing progress")
+	wait := fs.Bool("wait", false, "wait until all changes are uploaded, showing progress")
 	onConflict := fs.String("on-conflict", "hold", "when the drive has a different file of that name: hold, new-version or keep-both")
 	online := fs.Bool("include-online-only", false, "read cloud online-only files (makes OneDrive download them)")
 	// Paths may come before, between or after the flags.
@@ -510,7 +514,7 @@ func cmdSend(e *env, args []string) int {
 		return e.report(o.err)
 	}
 	b := o.b
-	e.printf("%d sent, %d already there or left out, %d held, %d failed, %d online-only (not downloaded).\n",
+	e.printf("%d uploaded, %d already there or left out, %d held, %d failed, %d online-only (not downloaded).\n",
 		b.FilesDone, b.FilesSkipped, b.FilesHeld, b.FilesFailed, b.NotLocal)
 	switch {
 	case b.State == agent.BatchFailed:
@@ -521,7 +525,7 @@ func cmdSend(e *env, args []string) int {
 		e.errorf("olsyn-drive: %s\n", msg)
 		return exitError
 	case b.FilesHeld+b.FilesFailed+b.NotLocal > 0:
-		e.errorf("Some files were not sent: run \"olsyn-drive status\" or open the app's Transfers for the reasons.\n")
+		e.errorf("Some files were not uploaded: run \"olsyn-drive status\" or open the app's Transfers for the reasons.\n")
 		return exitError
 	}
 	return exitOK
