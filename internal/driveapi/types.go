@@ -58,6 +58,66 @@ func (n *Node) MTime() time.Time {
 	return n.UpdatedAt
 }
 
+// GeneratedInfo is what a listing says about a generated entry: a file or
+// folder the drive computes from other files (previews, converted textures).
+// Generated files have no versions.
+type GeneratedInfo struct {
+	// ResultKey names the built bytes; it changes when they do. "" until built.
+	ResultKey string `json:"result_key"`
+	Built     bool   `json:"built"`
+	// SizeExact is false while the listed size is an estimate (not built yet).
+	SizeExact bool   `json:"size_exact"`
+	State     string `json:"state"`
+}
+
+// GeneratedInfo returns the generated details, and whether n is generated.
+func (n *Node) GeneratedInfo() (GeneratedInfo, bool) {
+	s := strings.TrimSpace(string(n.Generated))
+	if s == "" || s == "null" || s == "false" {
+		return GeneratedInfo{}, false
+	}
+	var g GeneratedInfo
+	_ = json.Unmarshal(n.Generated, &g) // "true" alone: generated, nothing known
+	return g, true
+}
+
+// Content identities of generated files, used where a version id is used for
+// stored files. GeneratedUnbuilt: the bytes and the real size are not known
+// yet. GeneratedPrefix+"k:"+result key: built, as a listing named it.
+// GeneratedPrefix+"e:"+ETag: as a read answered it (pinned with If-Range).
+const (
+	GeneratedPrefix  = "gen:"
+	GeneratedUnbuilt = GeneratedPrefix
+	generatedByKey   = GeneratedPrefix + "k:"
+	generatedByETag  = GeneratedPrefix + "e:"
+)
+
+// IsGeneratedVersion reports a content identity of a generated file.
+func IsGeneratedVersion(v string) bool { return strings.HasPrefix(v, GeneratedPrefix) }
+
+// GeneratedETagVersion is the content identity for bytes a read answered
+// with this ETag.
+func GeneratedETagVersion(etag string) string { return generatedByETag + etag }
+
+// IsGeneratedETagVersion reports an identity learnt from a read.
+func IsGeneratedETagVersion(v string) bool { return strings.HasPrefix(v, generatedByETag) }
+
+// ContentVersion identifies the bytes of a file: its current version id, or
+// for a generated file one of the generated identities. "" for a folder or a
+// file without content.
+func (n *Node) ContentVersion() string {
+	if n.Kind != KindFile {
+		return ""
+	}
+	if g, ok := n.GeneratedInfo(); ok {
+		if g.Built && g.SizeExact && g.ResultKey != "" {
+			return generatedByKey + g.ResultKey
+		}
+		return GeneratedUnbuilt
+	}
+	return n.VersionID()
+}
+
 // IsManaged reports a file managed by an integration.
 func (n *Node) IsManaged() bool {
 	s := strings.TrimSpace(string(n.Managed))

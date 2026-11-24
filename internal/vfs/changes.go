@@ -202,7 +202,7 @@ func (fs *FS) confirmsOwn(tx *index.Tx, ch *driveapi.Change) bool {
 		return false
 	}
 	e, err := tx.BySID(n.ID)
-	if err != nil || e.Name != n.Name || e.Kind != n.Kind || (!e.IsDir() && e.VersionID != n.VersionID()) {
+	if err != nil || e.Name != n.Name || e.Kind != n.Kind || (!e.IsDir() && e.VersionID != n.ContentVersion()) {
 		return false
 	}
 	parent, err := tx.Get(e.ParentID)

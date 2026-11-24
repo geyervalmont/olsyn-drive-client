@@ -663,8 +663,14 @@ func (fs *FS) mergeNode(tx *index.Tx, n *driveapi.Node, parent string) error {
 		e = &index.Entry{ID: n.ID}
 	}
 	e.ServerID, e.ParentID, e.Name, e.Kind = n.ID, parent, n.Name, n.Kind
-	e.Size, e.MTime, e.Created = n.Size, n.MTime(), n.CreatedAt
-	e.VersionID = n.VersionID()
+	size, ver := n.Size, n.ContentVersion()
+	if ver == driveapi.GeneratedUnbuilt && ex != nil && driveapi.IsGeneratedETagVersion(ex.VersionID) {
+		// a read here already built it and learnt its real size; a listing
+		// from before must not bring the estimate back
+		size, ver = ex.Size, ex.VersionID
+	}
+	e.Size, e.MTime, e.Created = size, n.MTime(), n.CreatedAt
+	e.VersionID = ver
 	e.SHA256 = ""
 	if n.CurrentVersion != nil {
 		e.SHA256 = n.CurrentVersion.SHA256

@@ -87,6 +87,10 @@ type DownloadRequest struct {
 	Offset     int64
 	Length     int64
 	Dst        io.WriterAt
+	// ExpectTotal, when positive, is the file size the caller counts on: an
+	// answer for a file of another size fails with a version_changed error
+	// (for content that has no version id to pin, such as generated files).
+	ExpectTotal int64
 }
 
 // Direction of a transfer.

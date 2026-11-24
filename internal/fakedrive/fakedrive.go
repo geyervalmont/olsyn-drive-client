@@ -12,6 +12,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -130,6 +131,23 @@ type node struct {
 	modifiedAt *time.Time
 	trashed    *time.Time
 	versions   []*version
+	// gen marks a generated file or folder: computed, no versions.
+	gen *generated
+}
+
+// generated is a generated entry. A file's bytes exist once built; until
+// then the listing shows estimate as its size. A read builds it.
+type generated struct {
+	data     []byte
+	built    bool
+	estimate int64
+	// busy answers that many reads with 503 and Retry-After before building.
+	busy int
+}
+
+func (g *generated) etag() string {
+	sum := sha256.Sum256(g.data)
+	return `"r-` + hex.EncodeToString(sum[:]) + `"`
 }
 
 type version struct {
@@ -312,6 +330,35 @@ func (s *Server) AddFile(parentID, name string, data []byte) string {
 	n := s.addNodeLocked(parentID, driveapi.KindFile, name)
 	s.addVersionLocked(n, data, "", nil)
 	return n.id
+}
+
+// AddGeneratedFolder adds a generated (computed, read-only) folder.
+func (s *Server) AddGeneratedFolder(parentID, name string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := s.addNodeLocked(parentID, driveapi.KindFolder, name)
+	n.gen = &generated{built: true}
+	return n.id
+}
+
+// AddGeneratedFile adds a generated file whose bytes are data. Not built,
+// the listing shows estimate as its size until a read builds it; busy reads
+// are answered 503 with Retry-After first.
+func (s *Server) AddGeneratedFile(parentID, name string, data []byte, built bool, estimate int64, busy int) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := s.addNodeLocked(parentID, driveapi.KindFile, name)
+	n.gen = &generated{data: data, built: built, estimate: estimate, busy: busy}
+	return n.id
+}
+
+// RebuildGenerated gives a generated file other bytes, as when its source changed.
+func (s *Server) RebuildGenerated(id string, data []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n := s.nodes[id]; n != nil && n.gen != nil {
+		n.gen.data, n.gen.built = data, true
+	}
 }
 
 // PutVersion stores a new version of a file, as if someone else saved it.
@@ -745,6 +792,12 @@ func (n *node) current() *version {
 }
 
 func (n *node) size() int64 {
+	if n.gen != nil {
+		if n.gen.built {
+			return int64(len(n.gen.data))
+		}
+		return n.gen.estimate
+	}
 	if v := n.current(); v != nil {
 		return v.content.size()
 	}
@@ -928,6 +981,20 @@ func (s *Server) toAPILocked(n *node) driveapi.Node {
 			out.Managed = managedBy
 			out.Can.Write, out.Can.Delete = false, false
 		}
+	}
+	if n.gen != nil {
+		out.Role, out.Can = "viewer", driveapi.Can{Read: true}
+		key := ""
+		if n.gen.built && n.kind == driveapi.KindFile {
+			key = strings.Trim(n.gen.etag(), `"`)[2:18]
+		}
+		isFile := n.kind == driveapi.KindFile
+		state := "built"
+		if isFile && !n.gen.built {
+			state = "not_built"
+		}
+		out.Generated, _ = json.Marshal(map[string]any{"path": n.name, "result_key": key, "built": isFile && n.gen.built,
+			"size_exact": isFile && n.gen.built, "state": state, "binding_name": "Test outputs"})
 	}
 	if v := n.current(); v != nil {
 		out.CurrentVersion = &driveapi.Version{ID: v.id, Number: v.number, Size: v.content.size(), SHA256: v.sha256,

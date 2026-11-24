@@ -31,10 +31,20 @@ func VersionETag(versionID string) string { return `"v-` + versionID + `"` }
 // length <= 0 reads to the end. versionID pins the version: when set,
 // If-Range makes a changed validator fail loudly instead of mixing versions.
 // A range starting at or past the end answers an *Error with Status 416.
+// versionID may be a generated identity (IsGeneratedVersion): reading a
+// generated file that is not built yet makes the drive build it.
 func (c *Client) Download(ctx context.Context, nodeID, versionID string, off, length int64) (*Download, error) {
 	q := url.Values{}
-	if versionID != "" {
+	// A generated file has no versions: no version parameter, and the
+	// validator is the ETag an earlier read answered with, when known.
+	ifRange := ""
+	switch {
+	case IsGeneratedETagVersion(versionID):
+		ifRange = strings.TrimPrefix(versionID, generatedByETag)
+	case IsGeneratedVersion(versionID):
+	case versionID != "":
 		q.Set("version", versionID)
+		ifRange = VersionETag(versionID)
 	}
 	h := http.Header{"Accept": {"*/*"}}
 	if off > 0 || length > 0 {
@@ -43,8 +53,8 @@ func (c *Client) Download(ctx context.Context, nodeID, versionID string, off, le
 			r += strconv.FormatInt(off+length-1, 10)
 		}
 		h.Set("Range", r)
-		if versionID != "" {
-			h.Set("If-Range", VersionETag(versionID))
+		if ifRange != "" {
+			h.Set("If-Range", ifRange)
 		}
 	}
 	resp, err := c.send(ctx, request{op: "download", method: http.MethodGet, path: pathID("/api/mount/v1/nodes/", nodeID, "/content"), query: q, header: h})
@@ -72,7 +82,7 @@ func (c *Client) Download(ctx context.Context, nodeID, versionID string, off, le
 			drainClose(resp.Body)
 			return nil, &Error{Op: "download", Status: resp.StatusCode, Err: fmt.Errorf("no length on a full answer")}
 		}
-		if versionID != "" && d.ETag != "" && d.ETag != VersionETag(versionID) {
+		if ifRange != "" && d.ETag != "" && d.ETag != ifRange {
 			drainClose(resp.Body)
 			return nil, &Error{Op: "download", Status: http.StatusPreconditionFailed, Code: "version_changed", Err: fmt.Errorf("server sent another version")}
 		}

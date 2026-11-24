@@ -3,12 +3,14 @@ package vfs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"sync"
 	"time"
 
 	"github.com/geyervalmont/olsyn-drive-client/internal/cache"
+	"github.com/geyervalmont/olsyn-drive-client/internal/driveapi"
 	"github.com/geyervalmont/olsyn-drive-client/internal/index"
 	"github.com/geyervalmont/olsyn-drive-client/internal/journal"
 	"github.com/geyervalmont/olsyn-drive-client/internal/transfer"
@@ -186,6 +188,14 @@ func (fs *FS) openExisting(ctx context.Context, e *index.Entry, path string, fl 
 		return nil, newErr(KindIsDir, "open", path, nil)
 	case !e.IsDir() && (fl.Access&AccessWrite != 0 || fl.Truncate) && !canModify(e):
 		return nil, newErr(KindAccessDenied, "open", path, nil)
+	}
+	if !e.IsDir() && e.VersionID == driveapi.GeneratedUnbuilt && e.ContentKey == "" && fl.Access&AccessRead != 0 {
+		// a generated file not built yet: its listed size is an estimate,
+		// and the application learns the size when it opens the file
+		var err error
+		if e, err = fs.buildGenerated(ctx, e); err != nil {
+			return nil, err
+		}
 	}
 	h, err := fs.attach(e, path, fl.Access, fl.Share)
 	if err != nil {
@@ -424,8 +434,16 @@ func (fs *FS) fetch(ctx context.Context, on *openNode, dst *cache.Handle, e *ind
 			continue // fetched by another reader meanwhile
 		}
 		buf := &transfer.BufferAt{Buf: make([]byte, r.Len), Base: r.Off}
-		err := fs.eng.Download(ctx, transfer.DownloadRequest{TransferID: "read:" + e.ID, Name: e.Name,
-			NodeID: e.ServerID, VersionID: e.VersionID, Offset: r.Off, Length: r.Len, Dst: buf})
+		req := transfer.DownloadRequest{TransferID: "read:" + e.ID, Name: e.Name,
+			NodeID: e.ServerID, VersionID: e.VersionID, Offset: r.Off, Length: r.Len, Dst: buf}
+		generated := driveapi.IsGeneratedVersion(e.VersionID)
+		if generated {
+			req.ExpectTotal = e.Size // no version to pin: at least the same size
+		}
+		err := fs.eng.Download(ctx, req)
+		if err != nil && generated && driveapi.IsVersionChanged(err) {
+			fs.forgetGenerated(e.ID, e.VersionID)
+		}
 		if err != nil {
 			fs.noteErr(err)
 			if !overlaps(r, must) {
@@ -444,6 +462,86 @@ func (fs *FS) fetch(ctx context.Context, on *openNode, dst *cache.Handle, e *ind
 		}
 	}
 	return nil
+}
+
+// buildGenerated reads the first byte of a generated file that is not built
+// yet: the drive builds it and answers with its real size and ETag, which
+// become the entry's size and content identity. While the drive is busy
+// building it waits and asks again, up to the read timeout.
+func (fs *FS) buildGenerated(ctx context.Context, e *index.Entry) (*index.Entry, error) {
+	if e.ServerID == "" {
+		return nil, newErr(KindOther, "open", e.Name, errors.New("no drive copy to read from"))
+	}
+	if fs.offline() {
+		return nil, newErr(KindOffline, "open", e.Name, nil)
+	}
+	ctx, cancel := context.WithTimeout(ctx, fs.cfg.ReadTimeout)
+	defer cancel()
+	var total int64
+	var etag string
+	for attempt := 0; ; attempt++ {
+		d, err := fs.api.Download(ctx, e.ServerID, driveapi.GeneratedUnbuilt, 0, 1)
+		if err == nil {
+			total, etag = d.Total, d.ETag
+			_ = d.Body.Close()
+			break
+		}
+		if ctx.Err() != nil || !driveapi.IsRetryable(err) {
+			fs.noteErr(err)
+			fs.log.Warn("vfs: building a generated file failed", "node", e.ServerID, "name", e.Name, "err", err)
+			return nil, classify("open", e.Name, err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, newErr(KindTimeout, "open", e.Name, ctx.Err())
+		case <-time.After(fs.cfg.Backoff.Delay(min(attempt, 8), err)):
+		}
+	}
+	fs.noteOK()
+	if total < 0 || etag == "" {
+		err := fmt.Errorf("the drive sent no size or ETag for a generated file (size %d, ETag %q)", total, etag)
+		fs.log.Warn("vfs: building a generated file failed", "node", e.ServerID, "name", e.Name, "err", err)
+		return nil, newErr(KindOther, "open", e.Name, err)
+	}
+	var out *index.Entry
+	fs.treeMu.Lock()
+	err := fs.idx.Update(func(tx *index.Tx) error {
+		cur, err := tx.Get(e.ID)
+		if err != nil {
+			return err
+		}
+		if cur.VersionID == driveapi.GeneratedUnbuilt && cur.ContentKey == "" {
+			cur.Size, cur.VersionID = total, driveapi.GeneratedETagVersion(etag)
+			if err := tx.Put(cur); err != nil {
+				return err
+			}
+		}
+		out = cur
+		return nil
+	})
+	fs.treeMu.Unlock()
+	if err != nil {
+		return nil, classify("open", e.Name, err)
+	}
+	return out, nil
+}
+
+// forgetGenerated marks a generated file whose bytes changed on the drive as
+// not built, so the next open asks for its size and identity again.
+func (fs *FS) forgetGenerated(id, version string) {
+	fs.treeMu.Lock()
+	defer fs.treeMu.Unlock()
+	err := fs.idx.Update(func(tx *index.Tx) error {
+		cur, err := tx.Get(id)
+		if err != nil || cur.VersionID != version || cur.ContentKey != "" {
+			return nil
+		}
+		cur.VersionID = driveapi.GeneratedUnbuilt
+		return tx.Put(cur)
+	})
+	if err != nil {
+		fs.log.Warn("vfs: forget generated content", "err", err)
+	}
 }
 
 func overlaps(r cache.Range, rs []cache.Range) bool {

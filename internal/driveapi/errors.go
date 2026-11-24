@@ -202,6 +202,16 @@ func IsConflict(err error) bool {
 	return ok && !e.Storage && (e.Code == CodeVersionConflict || e.Code == CodeNameConflict)
 }
 
+// CodeVersionChanged: the bytes on the drive are no longer the ones asked for.
+const CodeVersionChanged = "version_changed"
+
+// IsVersionChanged reports a read that found other bytes than the ones it
+// was pinned to.
+func IsVersionChanged(err error) bool {
+	e, ok := AsError(err)
+	return ok && e.Code == CodeVersionChanged
+}
+
 // IsVersionConflict reports 409 version_conflict.
 func IsVersionConflict(err error) bool {
 	e, ok := AsError(err)

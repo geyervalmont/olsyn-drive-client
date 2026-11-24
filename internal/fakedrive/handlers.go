@@ -545,6 +545,10 @@ func (s *Server) content(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusNotFound, driveapi.CodeNotFound, "not found", nil)
 		return
 	}
+	if n.gen != nil {
+		s.generatedContent(w, r, n)
+		return
+	}
 	v := n.current()
 	if want := r.URL.Query().Get("version"); want != "" {
 		v = nil
@@ -564,8 +568,41 @@ func (s *Server) content(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusNotFound, driveapi.CodeNotFound, "no such version", nil)
 		return
 	}
-	content := v.content
-	etag := driveapi.VersionETag(v.id)
+	serveRange(w, r, v.content, driveapi.VersionETag(v.id), drop)
+}
+
+// generatedContent serves a generated file: no versions, the result's ETag,
+// built by the first GET. Called with s.mu held; it unlocks.
+func (s *Server) generatedContent(w http.ResponseWriter, r *http.Request, n *node) {
+	g := n.gen
+	if r.URL.Query().Get("version") != "" {
+		s.mu.Unlock()
+		fail(w, http.StatusUnprocessableEntity, "invalid", "generated files have no versions", nil)
+		return
+	}
+	if !g.built {
+		if r.Method == http.MethodHead {
+			s.mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if g.busy > 0 {
+			g.busy--
+			s.mu.Unlock()
+			w.Header().Set("Retry-After", "1")
+			fail(w, http.StatusServiceUnavailable, "building", "being built", nil)
+			return
+		}
+		g.built = true
+	}
+	data, etag := g.data, g.etag()
+	s.mu.Unlock()
+	w.Header().Set("Cache-Control", "private, no-cache")
+	serveRange(w, r, memBlob(data), etag, -1)
+}
+
+// serveRange answers one byte range of content (or all of it).
+func serveRange(w http.ResponseWriter, r *http.Request, content blob, etag string, drop int64) {
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Accept-Ranges", "bytes")
 	total := content.size()

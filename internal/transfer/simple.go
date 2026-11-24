@@ -514,6 +514,10 @@ func (s *Simple) downloadChunk(ctx context.Context, req DownloadRequest, off, n 
 		return 0, err
 	}
 	defer d.Body.Close()
+	if req.ExpectTotal > 0 && d.Total >= 0 && d.Total != req.ExpectTotal {
+		return 0, &driveapi.Error{Op: "download", Status: 412, Code: driveapi.CodeVersionChanged,
+			Err: fmt.Errorf("the file is now %d bytes, not %d", d.Total, req.ExpectTotal)}
+	}
 	r := &throttled{ctx: ctx, r: d.Body, g: s.gate, l: &s.down}
 	buf := make([]byte, chunk)
 	var got int64
