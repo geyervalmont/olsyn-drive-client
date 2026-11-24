@@ -1,0 +1,187 @@
+/* Design tokens copied from the Olsyn Drive web app so the desktop client looks
+ * like part of it. Source (read-only): drive web app, web/src/styles/tokens.css
+ * on origin/main, 2026-11-24. Values are copied as they are; the tokens for the
+ * web app's public share pages (--pub-*) are left out because nothing here uses
+ * them. Additions for the desktop client are at the end, under "Desktop client". */
+
+/* Olsyn Drive tokens: the Olsyn platform's Navy & White Coffee language.
+ * Paper ground, white working sheet, navy ink and navy frame, the navy ramp's
+ * 500 step for actions. Lora sets titles; Hanken Grotesk sets everything read
+ * as prose, a control or a label. Dark is the same family at night. */
+
+:root {
+  --font: 'Hanken Grotesk Variable', 'Hanken Grotesk', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'Lora Variable', 'Lora', 'Newsreader', Georgia, 'Times New Roman', serif;
+
+  /* The four brand colours. */
+  --navy: #212e45;
+  --charcoal: #3d4552;
+  --coffee: #e8e0d1;
+  --dove: #fffcfa;
+
+  --bg: #f5f3ef;
+  --sheet: #ffffff;
+  --sheet-2: #faf8f5;
+  --sheet-3: #f1eee8;
+  --ink: #212e45;
+  --ink-2: #3d4552;
+  --ink-3: #6a717c;
+  --rule: #e6e2da;
+  --rule-strong: #d0cbc1;
+
+  --accent: #496497;
+  --accent-hover: #3c527c;
+  --accent-ink: #ffffff;
+  --accent-wash: #edf0f6;
+  --accent-wash-strong: #dee3ed;
+  --accent-text: #3c527c;
+
+  --danger: #b0362a;
+  --danger-hover: #93291f;
+  --danger-wash: #fbe9e6;
+  --danger-ink: #ffffff;
+  --warn: #85560a;
+  --warn-wash: #fbf0d8;
+  --info-wash: #e9edf4;
+
+  /* Charts: one validated series hue (dataviz reference slot 1), hairline chrome,
+   * and a reserved status green. Warn/bad states reuse --warn / --danger. */
+  --series-1: #2a78d6;
+  --viz-grid: #ebe8e1;
+  --viz-axis: #d0cbc1;
+  --st-good: #0ca30c;
+
+  --focus: #496497;
+
+  /* The navy frame (the sidebar) and what sits on it. */
+  --frame: #212e45;
+  --frame-ink: #ffffff;
+  --frame-ink-2: rgba(255, 252, 250, 0.74);
+  --frame-ink-3: rgba(255, 252, 250, 0.52);
+  --frame-rule: rgba(195, 204, 218, 0.16);
+  --frame-hover: rgba(138, 153, 180, 0.1);
+  --frame-active: rgba(138, 153, 180, 0.14);
+  --frame-active-rule: rgba(138, 153, 180, 0.28);
+  --frame-active-ink: #bdc7db;
+  /* The platform's corner light on the paper ground. */
+  --ground-glow: radial-gradient(ellipse at 100% 0%, rgba(106, 130, 175, 0.09), transparent 45%);
+
+
+  --overlay: rgba(24, 34, 54, 0.36);
+  --shadow-pop: 0 1px 2px rgba(33, 46, 69, 0.06), 0 14px 32px -10px rgba(33, 46, 69, 0.24);
+  --shadow-sheet: 0 0 0 1px var(--rule);
+
+  --r-s: 3px;
+  --r-m: 6px;
+  --r-l: 12px;
+
+  --row-h: 40px;
+  --sidebar-w: 236px;
+  --details-w: 372px;
+  --topbar-h: 54px;
+
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #10161f;
+    --sheet: #171f2c;
+    --sheet-2: #1c2636;
+    --sheet-3: #232f43;
+    --ink: #eceef2;
+    --ink-2: #b6bfce;
+    --ink-3: #8d98ab;
+    --rule: #263247;
+    --rule-strong: #38465f;
+    --accent: #95a6c6;
+    --accent-hover: #bdc7db;
+    --accent-ink: #121a28;
+    --accent-wash: #212d44;
+    --accent-wash-strong: #2b3b59;
+    --accent-text: #b4c1d9;
+    --danger: #ef8a7c;
+    --danger-hover: #f5a195;
+    --danger-wash: #3a1f1d;
+    --danger-ink: #1c0b08;
+    --warn: #e2b566;
+    --warn-wash: #33290f;
+    --info-wash: #1c2940;
+    --series-1: #3987e5;
+    --viz-grid: #212b3c;
+    --viz-axis: #3a4861;
+    --st-good: #0ca30c;
+    --focus: #b4c1d9;
+    --frame: #0c1119;
+    --frame-rule: rgba(195, 204, 218, 0.12);
+    --ground-glow: none;
+    --overlay: rgba(4, 8, 14, 0.6);
+    --shadow-pop: 0 0 0 1px #2c3950, 0 12px 32px -6px rgba(0, 0, 0, 0.6);
+    --shadow-sheet: 0 0 0 1px var(--rule);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --bg: #10161f;
+  --sheet: #171f2c;
+  --sheet-2: #1c2636;
+  --sheet-3: #232f43;
+  --ink: #eceef2;
+  --ink-2: #b6bfce;
+  --ink-3: #8d98ab;
+  --rule: #263247;
+  --rule-strong: #38465f;
+  --accent: #95a6c6;
+  --accent-hover: #bdc7db;
+  --accent-ink: #121a28;
+  --accent-wash: #212d44;
+  --accent-wash-strong: #2b3b59;
+  --accent-text: #b4c1d9;
+  --danger: #ef8a7c;
+  --danger-hover: #f5a195;
+  --danger-wash: #3a1f1d;
+  --danger-ink: #1c0b08;
+  --warn: #e2b566;
+  --warn-wash: #33290f;
+  --info-wash: #1c2940;
+  --series-1: #3987e5;
+  --viz-grid: #212b3c;
+  --viz-axis: #3a4861;
+  --st-good: #0ca30c;
+  --focus: #b4c1d9;
+  --frame: #0c1119;
+  --frame-rule: rgba(195, 204, 218, 0.12);
+  --ground-glow: none;
+  --overlay: rgba(4, 8, 14, 0.6);
+  --shadow-pop: 0 0 0 1px #2c3950, 0 12px 32px -6px rgba(0, 0, 0, 0.6);
+  --shadow-sheet: 0 0 0 1px var(--rule);
+  color-scheme: dark;
+}
+
+/* ---------- Desktop client additions ---------- */
+:root {
+  /* Type scale from the web app (app.css header): 11.5 / 12.5 / 14 / 16 / 19 / 23 / 30 */
+  --t-xs: 11.5px;
+  --t-s: 12.5px;
+  --t-m: 14px;
+  --t-l: 16px;
+  --t-xl: 19px;
+  --t-2xl: 23px;
+  --t-3xl: 30px;
+  /* Spacing on a 4 px step, as the web app's paddings use. */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --s-10: 40px;
+  /* Motion: the web app's ease and durations (120-140 ms for controls). */
+  --d-fast: 120ms;
+  --d-mid: 200ms;
+  --d-slow: 420ms;
+  --frame-w: 216px;
+}
