@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/geyervalmont/olsyn-drive-client/internal/blocked"
 	"github.com/geyervalmont/olsyn-drive-client/internal/platform"
 	"github.com/geyervalmont/olsyn-drive-client/internal/update"
 )
@@ -63,30 +64,71 @@ func offerInstall(e *env) (code int, done bool) {
 	if runtime.GOOS != "windows" || !hasUI {
 		return 0, false
 	}
-	dir, err := platform.DefaultInstallDir()
-	if err != nil {
-		return 0, false
+	return firstLaunch(e, osLaunchDeps(e))
+}
+
+// launchDeps are what firstLaunch needs from the system; a test replaces
+// them to check that nothing is written before the person agrees.
+type launchDeps struct {
+	installDir       func() (string, error)
+	self             func() (string, error)
+	installedVersion func() (string, error)
+	ask              func(title, text string) bool
+	showError        func(title, text string)
+	start            func(exe string) error
+	install          func() error
+}
+
+func osLaunchDeps(e *env) launchDeps {
+	return launchDeps{
+		installDir:       platform.DefaultInstallDir,
+		self:             ownExecutable,
+		installedVersion: platform.InstalledVersion,
+		ask:              askOKCancel,
+		showError:        showError,
+		start: func(exe string) error {
+			_, err := platform.StartDetached(exe, nil)
+			return err
+		},
+		install: func() error {
+			_, err := installSelf(e, installOptions{Autostart: true, Start: true})
+			return err
+		},
 	}
-	self, err := ownExecutable()
-	if err != nil {
-		return 0, false
+}
+
+// firstLaunch decides between installing, updating and opening the
+// installed copy, and asks first. Until the person agrees it only reads:
+// no folder, log, setting or registration is written, so a copy opened from
+// Downloads and declined leaves nothing behind.
+func firstLaunch(e *env, d launchDeps) (code int, done bool) {
+	dir, err := d.installDir()
+	if err == nil {
+		var self string
+		if self, err = d.self(); err == nil {
+			return launchFrom(e, d, self, filepath.Join(dir, platform.ExecutableName))
+		}
 	}
-	target := filepath.Join(dir, platform.ExecutableName)
-	installedVersion, _ := platform.InstalledVersion()
+	// Running the app from here would write its logs and window state
+	// unasked: say what is wrong instead.
+	d.showError("Olsyn Drive cannot be installed", err.Error())
+	return e.report(err), true
+}
+
+func launchFrom(e *env, d launchDeps, self, target string) (int, bool) {
+	installedVersion, _ := d.installedVersion()
 	plan := planLaunch(samePath(self, target), fileExists(target), version, installedVersion,
 		func() bool { return sameContent(self, target) })
 	switch plan {
 	case launchHere:
 		return 0, false
 	case launchInstalled:
-		if _, err := platform.StartDetached(target, nil); err != nil {
+		if err := d.start(target); err != nil {
 			return e.report(err), true
 		}
 		return exitOK, true
 	case launchInstall:
-		if !askOKCancel("Install Olsyn Drive", "Install Olsyn Drive on this PC?\n\n"+
-			"It installs for you only, needs no administrator rights, and starts when you sign in to Windows. "+
-			"You can remove it in Settings > Apps.") {
+		if !d.ask(installQuestion(dataPresent(e.paths))) {
 			return exitOK, true
 		}
 	case launchUpgrade:
@@ -94,16 +136,42 @@ func offerInstall(e *env) (code int, done bool) {
 		if from == "" {
 			from = "the installed version"
 		}
-		if !askOKCancel("Update Olsyn Drive", fmt.Sprintf("Update Olsyn Drive from %s to %s?\n\n"+
+		if !d.ask("Update Olsyn Drive", fmt.Sprintf("Update Olsyn Drive from %s to %s?\n\n"+
 			"The drive disconnects for a moment. Files waiting to upload are kept and carry on after the update.", from, version)) {
 			return exitOK, true
 		}
 	}
-	if _, err := installSelf(e, installOptions{Autostart: true, Start: true}); err != nil {
-		showError("Olsyn Drive could not be installed", err.Error())
+	if err := d.install(); err != nil {
+		d.showError("Olsyn Drive could not be installed", err.Error())
 		return e.report(err), true
 	}
 	return exitOK, true
+}
+
+// installQuestion is the question a copy opened with nothing installed asks.
+// With the data folder still there (the program was removed, by the person
+// or by security software) it is a reinstall that keeps the waiting files.
+func installQuestion(reinstall bool) (title, text string) {
+	const how = "It installs for you only, needs no administrator rights, and starts when you sign in to Windows. " +
+		"You can remove it in Settings > Apps."
+	if reinstall {
+		return "Reinstall Olsyn Drive", "Reinstall Olsyn Drive on this PC?\n\n" +
+			"Olsyn Drive is no longer installed here, but its data is: reinstalling keeps your waiting files, " +
+			"and anything not yet uploaded carries on once it is installed again. " +
+			"If Windows Security removed it, see " + blocked.HelpURL + " first.\n\n" + how
+	}
+	return "Install Olsyn Drive", "Install Olsyn Drive on this PC?\n\n" + how
+}
+
+// dataPresent reports whether this user's data folder (settings, queue,
+// cache) exists. It only looks.
+func dataPresent(p platform.Paths) bool {
+	for _, d := range []string{p.Config, p.State} {
+		if d != "" && fileExists(d) {
+			return true
+		}
+	}
+	return false
 }
 
 // sameContent reports whether two files hold the same bytes.
