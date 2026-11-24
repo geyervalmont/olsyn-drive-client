@@ -1,0 +1,6 @@
+Here is the Olsyn Drive test version for Windows: <download link>
+It is an unsigned pre-release, so Windows may warn you: on "Windows protected your PC" choose More info, then Run anyway.
+Windows Security may also remove it (it did in our testing; we believe it is a false alarm from an automatic check). To prevent that, before installing:
+Windows Security > Virus & threat protection > Manage settings > Exclusions > Add or remove exclusions > Add an exclusion > Folder > %LOCALAPPDATA%\Programs\Olsyn Drive (create the folder if it is not there). Only that folder: never the cache, W:, Downloads or a whole disk.
+If it was removed anyway, your files waiting to upload are safe: add the exclusion, download again and install; they carry on.
+Full steps, and how to remove the exclusion later (the signed release won't need it): https://github.com/geyervalmont/olsyn-drive-client/blob/main/docs/pre-release-windows.md

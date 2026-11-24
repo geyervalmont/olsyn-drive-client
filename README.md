@@ -7,6 +7,8 @@ Windows 11 first; macOS and Linux follow.
 - Design: [docs/design.md](docs/design.md)
 - Agent and interface contract: [docs/ipc.md](docs/ipc.md)
 - Testing on Windows: [docs/testing-windows.md](docs/testing-windows.md)
+- Unsigned pre-release on Windows (SmartScreen, Windows Security, the one folder exclusion):
+  [docs/pre-release-windows.md](docs/pre-release-windows.md)
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md); reporting a vulnerability: [SECURITY.md](SECURITY.md)
 
 ## Install
