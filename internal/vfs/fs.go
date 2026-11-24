@@ -50,6 +50,9 @@ type FS struct {
 	upMu      sync.Mutex
 	uploading map[string]string // local id -> content key being uploaded
 
+	// release: the timings of the release rules; guarded by mu.
+	release cache.ReleasePolicy
+
 	kick chan struct{} // wake the dispatcher
 	wake chan struct{} // wake the changes loop
 
@@ -102,7 +105,10 @@ func New(cfg Config) (*FS, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	fs := &FS{cfg: cfg, api: cfg.API, eng: cfg.Engine, idx: cfg.Index, cache: cfg.Cache, jr: cfg.Journal, log: cfg.Logger,
+	if cfg.ReleaseInterval <= 0 {
+		cfg.ReleaseInterval = 30 * time.Second
+	}
+	fs := &FS{release: cfg.Release.WithDefaults(), cfg: cfg, api: cfg.API, eng: cfg.Engine, idx: cfg.Index, cache: cfg.Cache, jr: cfg.Journal, log: cfg.Logger,
 		open: map[string]*openNode{}, pending: map[string]int{}, inflight: map[uint64]*running{}, displaced: map[string]displacedFile{},
 		uploading: map[string]string{}, listing: map[string]*listCall{}, state: StateOnline,
 		subs: map[int]chan Event{}, kick: make(chan struct{}, 1), wake: make(chan struct{}, 1)}
@@ -191,7 +197,7 @@ func (fs *FS) contentMatches(key string, crc uint32) bool {
 // upload queue and cache flushing. Stop ends it.
 func (fs *FS) Start(ctx context.Context) {
 	fs.ctx, fs.cancel = context.WithCancel(ctx)
-	loops := []func(){fs.dispatchLoop, fs.changesLoop, fs.flushLoop}
+	loops := []func(){fs.dispatchLoop, fs.changesLoop, fs.flushLoop, fs.releaseLoop}
 	if !fs.cfg.DisableStream {
 		loops = append(loops, fs.streamLoop)
 	}

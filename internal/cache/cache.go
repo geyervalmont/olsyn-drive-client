@@ -73,6 +73,13 @@ type meta struct {
 	Blocks    []byte    `json:"blocks"`
 	LastUsed  time.Time `json:"used"`
 	Dirty     bool      `json:"dirty"`
+	// Uploads from this PC (see CommitUpload): when the content reached the
+	// drive, what the drive said about its checksum, and the file's local id.
+	Sent  time.Time `json:"sent,omitzero"`
+	Check string    `json:"check,omitempty"`
+	Node  string    `json:"node,omitempty"`
+	// Read is when an application last read the content (NoteRead).
+	Read time.Time `json:"read,omitzero"`
 }
 
 type entry struct {
@@ -843,9 +850,36 @@ func (h *Handle) Adoptable() bool {
 	return h.e.Dirty && h.e.BaseLimit == 0
 }
 
-// Commit turns a dirty entry into the clean entry of the drive version it
-// became (after a successful upload). Returns ErrNotFound for an unknown key.
+// Checksum states of an upload, as the drive reports them.
+const (
+	// CheckVerified: the drive compared the bytes it stored with this PC's
+	// SHA-256 and they match. Only such content is released early.
+	CheckVerified = "verified"
+	// CheckClaimed: the drive took the upload and checks it later.
+	CheckClaimed = "claimed"
+	// CheckMismatch: the drive's check found other bytes.
+	CheckMismatch = "mismatch"
+)
+
+// Upload describes content this PC sent, for the release rules.
+type Upload struct {
+	// Node is the file's local id ("" when unknown).
+	Node string
+	// Check is the drive's checksum state: CheckVerified, CheckClaimed, or
+	// "" when the drive said nothing (it is then never released early).
+	Check string
+}
+
+// Commit is CommitUpload with nothing known about the drive's check.
 func (c *Cache) Commit(localKey, versionKey string) error {
+	return c.CommitUpload(localKey, versionKey, Upload{})
+}
+
+// CommitUpload turns a dirty entry into the clean entry of the drive version
+// it became (after a successful upload) and records the upload, so the
+// content can be released once the drive has confirmed it (ReleaseUploaded).
+// Returns ErrNotFound for an unknown key.
+func (c *Cache) CommitUpload(localKey, versionKey string, up Upload) error {
 	c.mu.Lock()
 	e := c.entries[localKey]
 	if e == nil {
@@ -864,6 +898,7 @@ func (c *Cache) Commit(localKey, versionKey string) error {
 	snap.Dirty = false
 	snap.BaseLimit = snap.Size
 	snap.Blocks = nil
+	snap.Sent, snap.Check, snap.Node = time.Now(), up.Check, up.Node
 	tmp := &entry{meta: snap}
 	for b := int64(0); b < c.nblocks(snap.Size); b++ {
 		tmp.set(b, true)
@@ -990,7 +1025,15 @@ func (c *Cache) evictLocked(want int64) {
 			cands = append(cands, e)
 		}
 	}
-	sort.Slice(cands, func(i, j int) bool { return cands[i].LastUsed.Before(cands[j].LastUsed) })
+	// Uploads the drive has not confirmed go last: under pressure they are
+	// evicted as any cached content is, but only once nothing else is left.
+	sort.Slice(cands, func(i, j int) bool {
+		ui, uj := unconfirmed(cands[i]), unconfirmed(cands[j])
+		if ui != uj {
+			return uj
+		}
+		return cands[i].LastUsed.Before(cands[j].LastUsed)
+	})
 	for _, e := range cands {
 		if c.used+want <= c.opts.Cap {
 			return

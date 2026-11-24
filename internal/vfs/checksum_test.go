@@ -17,15 +17,44 @@ func hexSum(b []byte) string {
 }
 
 // A large file is published as "claimed"; when the drive's checksum pass
-// later finds other bytes, the file is held with "re-upload", stays
-// readable from this PC's copy, and re-uploading replaces the damaged
-// version with a verified one.
+// later finds other bytes, this PC's copy (kept: it was never verified) is
+// uploaded again on its own.
+func TestDamagedLargeUploadIsSentAgain(t *testing.T) {
+	e := newEnvWith(t, fakedrive.Options{PartSize: part, SingleMax: 100 << 10, VerifyMax: 128 << 10}).start()
+	defer e.stop()
+	data := payload(5*part+77, 9)
+	e.fd.CorruptNextUploads(1)
+	if err := e.writeFile("/big.bin", data, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	e.waitSynced(20 * time.Second)
+	if n := e.fd.RunChecksumPass(); n != 1 {
+		t.Fatalf("pass checked %d versions", n)
+	}
+	e.fs.Refresh()
+	waitFor(t, 10*time.Second, "the second upload", func() bool {
+		fi, _ := e.fd.Lookup("/big.bin")
+		return fi.Versions == 2 && e.fs.Pending() == 0
+	})
+	if len(e.fs.Held()) != 0 {
+		t.Fatalf("held %+v", e.fs.Held())
+	}
+	e.fd.RunChecksumPass()
+	fi, _ := e.fd.Lookup("/big.bin")
+	if fi.ChecksumState != driveapi.ChecksumVerified || !bytes.Equal(fi.Data, data) {
+		t.Fatalf("after the second upload: state %q", fi.ChecksumState)
+	}
+}
+
+// A file the drive's checksum pass finds damaged twice is held with
+// "re-upload", stays readable from this PC's copy, and re-uploading
+// replaces the damaged version with a verified one.
 func TestDamagedLargeUploadIsHeldForReupload(t *testing.T) {
 	e := newEnvWith(t, fakedrive.Options{PartSize: part, SingleMax: 100 << 10, VerifyMax: 128 << 10}).start()
 	defer e.stop()
 	ctx := ctxT(t)
 	data := payload(5*part+77, 9)
-	e.fd.CorruptNextUploads(1)
+	e.fd.CorruptNextUploads(2)
 	if err := e.writeFile("/big.bin", data, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
@@ -36,6 +65,14 @@ func TestDamagedLargeUploadIsHeldForReupload(t *testing.T) {
 	}
 	if n := e.fd.RunChecksumPass(); n != 1 {
 		t.Fatalf("pass checked %d versions", n)
+	}
+	e.fs.Refresh()
+	waitFor(t, 10*time.Second, "the automatic second upload", func() bool {
+		fi, _ := e.fd.Lookup("/big.bin")
+		return fi.Versions == 2 && e.fs.Pending() == 0
+	})
+	if n := e.fd.RunChecksumPass(); n != 1 {
+		t.Fatalf("second pass checked %d versions", n)
 	}
 	e.fs.Refresh()
 	waitFor(t, 10*time.Second, "a held re-upload", func() bool { return len(e.fs.Held()) == 1 })
@@ -58,7 +95,7 @@ func TestDamagedLargeUploadIsHeldForReupload(t *testing.T) {
 	}
 	e.fd.RunChecksumPass()
 	fi, _ = e.fd.Lookup("/big.bin")
-	if fi.Versions != 2 || fi.ChecksumState != driveapi.ChecksumVerified || fi.SHA256 != hexSum(data) || !bytes.Equal(fi.Data, data) {
+	if fi.Versions != 3 || fi.ChecksumState != driveapi.ChecksumVerified || fi.SHA256 != hexSum(data) || !bytes.Equal(fi.Data, data) {
 		t.Fatalf("after re-upload: versions %d state %q", fi.Versions, fi.ChecksumState)
 	}
 	// the verified result settles the claim: nothing more is held

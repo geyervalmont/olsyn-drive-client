@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/geyervalmont/olsyn-drive-client/internal/cache"
 	"github.com/geyervalmont/olsyn-drive-client/internal/driveapi"
 	"github.com/geyervalmont/olsyn-drive-client/internal/index"
 )
@@ -65,18 +66,18 @@ func (fs *FS) pollChanges(ctx context.Context) error {
 			return fs.idx.SetMeta(metaCursor, strconv.FormatInt(p.Next, 10))
 		}
 		var relist []string
-		var damaged []mismatch
+		var outcomes []claimOutcome
 		fs.treeMu.Lock()
 		err = fs.idx.Update(func(tx *index.Tx) error {
-			relist, damaged = relist[:0], damaged[:0]
+			relist, outcomes = relist[:0], outcomes[:0]
 			for i := range p.Changes {
 				if err := fs.applyChange(tx, &p.Changes[i], &relist); err != nil {
 					return err
 				}
-				if m, err := checksumOutcome(tx, &p.Changes[i]); err != nil {
+				if o, err := checksumOutcome(tx, &p.Changes[i]); err != nil {
 					return err
-				} else if m != nil {
-					damaged = append(damaged, *m)
+				} else if o != nil {
+					outcomes = append(outcomes, *o)
 				}
 			}
 			return tx.SetMeta(metaCursor, strconv.FormatInt(p.Next, 10))
@@ -88,8 +89,23 @@ func (fs *FS) pollChanges(ctx context.Context) error {
 		for _, id := range relist {
 			fs.relist(id)
 		}
-		for _, m := range damaged {
-			fs.holdMismatch(m)
+		verified := false
+		for _, o := range outcomes {
+			check := cache.CheckVerified
+			if o.damaged != nil {
+				check = cache.CheckMismatch
+			}
+			if err := fs.cache.SetCheck(o.versionID, check); err != nil {
+				fs.log.Warn("vfs: record the drive's checksum verdict", "err", err)
+			}
+			if o.damaged != nil {
+				fs.holdMismatch(*o.damaged)
+			} else {
+				verified = true
+			}
+		}
+		if verified {
+			fs.releaseNow() // content the drive has just confirmed may go
 		}
 		if !p.HasMore {
 			return nil

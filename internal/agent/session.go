@@ -294,7 +294,7 @@ func (a *Agent) startSession(ctx context.Context) {
 	sess := Session{
 		ServerURL: a.account.Server, Token: a.token, DeviceID: a.account.DeviceID, UserID: a.account.UserID,
 		ReadOnly: a.account.ReadOnly, CacheDir: a.settings.CacheDir, CacheCapBytes: a.settings.CacheCapBytes,
-		Bandwidth: a.settings.Bandwidth,
+		CacheRelease: a.settings.CacheRelease, Bandwidth: a.settings.Bandwidth,
 	}
 	a.mu.Unlock()
 	a.emitState()

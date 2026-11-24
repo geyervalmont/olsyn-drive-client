@@ -13,12 +13,18 @@ import (
 // Large files are published by the drive as "claimed" and checked by its own
 // checksum pass later. This PC remembers which versions it sent (index meta
 // "claim:<version id>" = local id) until the pass reports "verified" or
-// "mismatch" through the changes feed. A mismatch becomes a held change the
-// person can re-upload from this PC's copy.
+// "mismatch" through the changes feed. A verified version's content may then
+// leave the cache (see cache.ReleaseUploaded); until then it is kept. A
+// mismatch is uploaded again from this PC's copy, once on its own; a second
+// mismatch of the same file becomes a held change the person can re-upload.
 
 const claimPrefix = "claim:"
 
 func claimKey(versionID string) string { return claimPrefix + versionID }
+
+// reuploadKey marks a file whose damaged version was re-uploaded on its
+// own once (index meta "reupload:<local id>").
+func reuploadKey(localID string) string { return "reupload:" + localID }
 
 // Reasons shown for a version the drive's checksum pass found damaged.
 const (
@@ -32,9 +38,15 @@ type mismatch struct {
 	size               int64
 }
 
+// claimOutcome is the drive's verdict on a version this PC sent.
+type claimOutcome struct {
+	versionID string
+	damaged   *mismatch // nil when verified
+}
+
 // checksumOutcome settles a claim when the changes feed reports the result
 // of the drive's checksum pass for a version this PC sent.
-func checksumOutcome(tx *index.Tx, ch *driveapi.Change) (*mismatch, error) {
+func checksumOutcome(tx *index.Tx, ch *driveapi.Change) (*claimOutcome, error) {
 	if ch.Op != driveapi.OpUpsert || ch.Node == nil || ch.Node.CurrentVersion == nil || ch.Node.Kind != driveapi.KindFile {
 		return nil, nil
 	}
@@ -46,20 +58,25 @@ func checksumOutcome(tx *index.Tx, ch *driveapi.Change) (*mismatch, error) {
 	}
 	switch v.ChecksumState {
 	case driveapi.ChecksumVerified:
-		return nil, tx.DeleteMeta(key)
+		if err := tx.DeleteMeta(reuploadKey(local)); err != nil {
+			return nil, err
+		}
+		return &claimOutcome{versionID: v.ID}, tx.DeleteMeta(key)
 	case driveapi.ChecksumMismatch:
 		if err := tx.DeleteMeta(key); err != nil {
 			return nil, err
 		}
-		return &mismatch{localID: local, versionID: v.ID, size: v.Size}, nil
+		return &claimOutcome{versionID: v.ID, damaged: &mismatch{localID: local, versionID: v.ID, size: v.Size}}, nil
 	}
 	return nil, nil
 }
 
-// holdMismatch turns a damaged version into a held upload. When the cache
-// still has every byte of the version, they are copied into unsent local
-// content (protected from eviction) and the held change offers re-upload;
-// otherwise it explains that the file must be copied again.
+// holdMismatch handles a damaged version. When the cache still has every
+// byte of the version (it should: content the drive has not verified is
+// never released early), they are copied into unsent local content and
+// uploaded again; a second mismatch of the same file is held with re-upload
+// offered. Without the bytes the held change explains that the file must be
+// copied again.
 func (fs *FS) holdMismatch(m mismatch) {
 	e, err := fs.idx.Get(m.localID)
 	if err != nil || e.IsDir() || e.VersionID != m.versionID || e.ContentKey != "" || fs.isPending(e.ID) {
@@ -85,6 +102,7 @@ func (fs *FS) holdMismatch(m mismatch) {
 			fs.log.Warn("vfs: keep a copy of a damaged upload", "err", cerr)
 		}
 	}
+	auto := false
 	if op.ContentKey != "" {
 		fs.treeMu.Lock()
 		err = fs.idx.Update(func(tx *index.Tx) error {
@@ -93,6 +111,13 @@ func (fs *FS) holdMismatch(m mismatch) {
 				return err
 			}
 			cur.ContentKey = op.ContentKey
+			if tx.Meta(reuploadKey(e.ID)) == "" {
+				// the first mismatch of this file: send it again on its own
+				auto = true
+				if err := tx.SetMeta(reuploadKey(e.ID), m.versionID); err != nil {
+					return err
+				}
+			}
 			return tx.Put(cur)
 		})
 		fs.treeMu.Unlock()
@@ -101,6 +126,9 @@ func (fs *FS) holdMismatch(m mismatch) {
 			fs.log.Warn("vfs: record a damaged upload", "err", err)
 			return
 		}
+	}
+	if auto {
+		op.State, op.HeldCode, op.Reason = journal.StatePending, "", ""
 	}
 	fs.mu.Lock()
 	fs.pending[op.NodeID]++
@@ -112,6 +140,11 @@ func (fs *FS) holdMismatch(m mismatch) {
 	if err != nil {
 		fs.doneLocked(op)
 		fs.log.Warn("vfs: queue a damaged upload", "err", err)
+		return
+	}
+	if auto {
+		fs.log.Warn("vfs: drive reported a damaged upload; sending it again", "seq", op.Seq)
+		fs.kickNow()
 		return
 	}
 	fs.log.Warn("vfs: drive reported a damaged upload", "seq", op.Seq, "reupload", op.ContentKey != "")

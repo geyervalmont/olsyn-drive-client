@@ -49,6 +49,12 @@ type Options struct {
 	// ChecksumPassDelay, when set, runs the checksum pass that long after
 	// each claimed upload, as the real drive's worker does.
 	ChecksumPassDelay time.Duration
+	// NeverVerify makes the checksum pass find nothing to do: claimed
+	// uploads stay claimed for good (a stuck worker).
+	NeverVerify bool
+	// NoChecksumState is a drive from before checksum states: it ignores
+	// the client's SHA-256 and reports no checksum_state.
+	NoChecksumState bool
 }
 
 // Server is a running fake drive.
@@ -486,6 +492,9 @@ func (s *Server) CorruptNextUploads(n int) {
 // does: "verified" with the SHA-256 set, or "mismatch". Each result shows
 // up in the changes feed as an upsert. It returns how many it checked.
 func (s *Server) RunChecksumPass() int {
+	if s.opts.NeverVerify {
+		return 0
+	}
 	type job struct {
 		n *node
 		v *version

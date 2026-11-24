@@ -50,6 +50,7 @@ func main() {
 type config struct {
 	addr, faults, data string
 	autoApprove        bool
+	checksums          string
 	bigFolder          int
 	virtualSize        int64
 }
@@ -62,6 +63,7 @@ func parse(args []string, stderr io.Writer) (config, error) {
 	fs.StringVar(&c.faults, "faults", "127.0.0.1:8788", "loopback address of the fault controls")
 	fs.StringVar(&c.data, "data", "", "keep uploaded content in files under this folder (default: in memory)")
 	fs.BoolVar(&c.autoApprove, "auto-approve", false, "approve every sign-in at once (no link page step)")
+	fs.StringVar(&c.checksums, "checksums", "verify", "large uploads: verify (claimed, verified 5 s later), never (stay claimed), none (a drive without checksum states)")
 	fs.IntVar(&c.bigFolder, "big-folder", 12000, "how many files the large folder holds")
 	gib := fs.Float64("virtual-gib", 5, "size of the generated large file, in GiB")
 	if err := fs.Parse(args); err != nil {
@@ -75,6 +77,11 @@ func parse(args []string, stderr io.Writer) (config, error) {
 		if err := loopback(a); err != nil {
 			return c, err
 		}
+	}
+	switch c.checksums {
+	case "verify", "never", "none":
+	default:
+		return c, fmt.Errorf("-checksums must be verify, never or none, not %q", c.checksums)
 	}
 	if c.bigFolder < 0 || c.virtualSize < 0 {
 		return c, errors.New("sizes must not be negative")
@@ -120,7 +127,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		_ = l.Close()
 	}
 	fd := fakedrive.New(fakedrive.Options{Addr: c.addr, DataDir: c.data, AutoApprove: c.autoApprove, PartSize: 16 << 20, SingleMax: 32 << 20,
-		ChecksumPassDelay: 5 * time.Second})
+		ChecksumPassDelay: 5 * time.Second, NeverVerify: c.checksums == "never", NoChecksumState: c.checksums == "none"})
 	defer fd.Close()
 	start := time.Now()
 	tree := seed(fd, c.bigFolder, c.virtualSize)

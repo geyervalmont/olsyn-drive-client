@@ -33,6 +33,11 @@ type env struct {
 	dir      string
 	cacheCap int64
 	attempts int
+	// release timings and how often they run (zero: the defaults, which
+	// release nothing within a test)
+	release      cache.ReleasePolicy
+	releaseEvery time.Duration
+	keepOffline  func(string) bool
 
 	fs    *vfs.FS
 	idx   *index.DB
@@ -82,7 +87,8 @@ func (e *env) start() *env {
 		}})
 	e.fs, err = vfs.New(vfs.Config{API: e.api, Engine: e.eng, Index: e.idx, Cache: e.cache, Journal: e.jr,
 		RootID: e.fd.RootID(), PCName: "TestPC", PollInterval: 200 * time.Millisecond, Backoff: fast,
-		ReadTimeout: 5 * time.Second, DisableStream: true, ReadAhead: 64 << 10})
+		ReadTimeout: 5 * time.Second, DisableStream: true, ReadAhead: 64 << 10,
+		Release: e.release, ReleaseInterval: e.releaseEvery, KeepOffline: e.keepOffline})
 	if err != nil {
 		t.Fatal(err)
 	}

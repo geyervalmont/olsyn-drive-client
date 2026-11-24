@@ -346,6 +346,9 @@ func (h *Handle) ReadAt(ctx context.Context, p []byte, off int64) (int, error) {
 	}
 	n, err := src.ReadAt(p[:want], off)
 	h.lastEnd = off + int64(n)
+	if n > 0 && clean {
+		src.NoteRead() // an application read it: keep it a while (release rules)
+	}
 	if err != nil && !errors.Is(err, io.EOF) {
 		return n, classify("read", h.path, err)
 	}

@@ -42,10 +42,11 @@ type Options struct {
 	AllowServer func(serverURL string) error
 
 	// Tuning, for tests; zero means the production default.
-	PollInterval  time.Duration
-	Backoff       driveapi.Backoff
-	DisableStream bool
-	Workers       int
+	PollInterval    time.Duration
+	Backoff         driveapi.Backoff
+	DisableStream   bool
+	Workers         int
+	ReleaseInterval time.Duration
 }
 
 // FS implements agent.FileSystem.
@@ -252,7 +253,7 @@ func (f *FS) open(r *session, root string) (err error) {
 	f.mu.Unlock()
 	v, err := vfs.New(vfs.Config{API: r.api, Engine: r.eng, Index: r.idx, Cache: r.cache, Journal: r.jr, RootID: root,
 		PCName: f.opts.PCName, PollInterval: f.opts.PollInterval, Backoff: f.opts.Backoff, DisableStream: f.opts.DisableStream,
-		Workers: f.opts.Workers, Logger: f.log})
+		Workers: f.opts.Workers, Logger: f.log, Release: releasePolicy(r.sess.CacheRelease), ReleaseInterval: f.opts.ReleaseInterval})
 	if err != nil {
 		return fmt.Errorf("core: start file system: %w", err)
 	}
@@ -403,6 +404,8 @@ func (f *FS) handle(r *session, ev vfs.Event) {
 			Body: "Someone else changed the file while you had it open, so yours was saved beside it as " + path.Base(copyPath) + "."}})
 	case vfs.EventState:
 		f.signal(agent.FSEvent{StatusChanged: true})
+	case vfs.EventCache:
+		f.invalidate() // content left this PC: the cache figures changed
 	}
 }
 
@@ -830,6 +833,29 @@ func (f *FS) SetBandwidth(b settings.Bandwidth) {
 	f.mu.Unlock()
 	if r != nil {
 		r.eng.SetBandwidth(b.UpBPS, b.DownBPS)
+	}
+}
+
+// releasePolicy turns the setting into the cache's timings.
+func releasePolicy(s settings.CacheRelease) cache.ReleasePolicy {
+	d := func(sec int64, def time.Duration) time.Duration {
+		switch {
+		case sec < 0:
+			return def
+		case sec == 0:
+			return time.Nanosecond // at once
+		}
+		return time.Duration(sec) * time.Second
+	}
+	return cache.ReleasePolicy{AfterUpload: d(s.AfterUploadSeconds, cache.DefaultAfterUpload),
+		KeepOpened: d(s.KeepOpenedSeconds, cache.DefaultKeepOpened)}
+}
+
+// SetCacheRelease applies new release timings at once.
+func (f *FS) SetCacheRelease(s settings.CacheRelease) {
+	if r := f.current(); r != nil {
+		r.vfs.SetReleasePolicy(releasePolicy(s))
+		f.invalidate()
 	}
 }
 

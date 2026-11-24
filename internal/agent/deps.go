@@ -99,6 +99,7 @@ type Session struct {
 	ReadOnly      bool
 	CacheDir      string
 	CacheCapBytes int64
+	CacheRelease  settings.CacheRelease
 	Bandwidth     settings.Bandwidth
 }
 
@@ -165,6 +166,8 @@ type FileSystem interface {
 	SetBandwidth(b settings.Bandwidth)
 	// SetCacheCap applies a new cache size cap at once.
 	SetCacheCap(bytes int64)
+	// SetCacheRelease applies new release timings at once.
+	SetCacheRelease(r settings.CacheRelease)
 	// Unsent counts journal entries and held items; works while stopped.
 	Unsent(ctx context.Context) (Unsent, error)
 	// ClearCache deletes the cache, unsent data included; only while stopped.

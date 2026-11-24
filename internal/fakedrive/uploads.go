@@ -281,6 +281,9 @@ func (s *Server) uploadComplete(w http.ResponseWriter, r *http.Request) {
 	}
 	// Small files are hashed here; large ones with a client hash are
 	// published as claimed and checked by the checksum pass later.
+	if s.opts.NoChecksumState {
+		req.SHA256 = "" // an older drive does not read it
+	}
 	if req.SHA256 != "" {
 		s.counts["upload.sha256_sent"]++
 	}

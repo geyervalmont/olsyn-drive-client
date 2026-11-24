@@ -117,6 +117,7 @@ const (
 	EventConflict EventKind = "conflict" // a conflict copy was made (Path is the copy)
 	EventState    EventKind = "state"    // connection state changed
 	EventSynced   EventKind = "synced"   // a queued change reached the drive
+	EventCache    EventKind = "cache"    // content left the cache (Reason says why)
 )
 
 // Event is one thing the agent or UI may show. No file content, no token.
@@ -188,5 +189,15 @@ type Config struct {
 	VolumeTotal int64
 	// DisableStream turns off the SSE wake-ups (tests).
 	DisableStream bool
-	Logger        *slog.Logger
+	// Release are the timings of releasing uploaded content from the cache
+	// once the drive has confirmed it (zero: cache.ReleasePolicy defaults).
+	// SetRelease changes them while running.
+	Release cache.ReleasePolicy
+	// ReleaseInterval is how often the release rules run (default 30 s).
+	ReleaseInterval time.Duration
+	// KeepOffline reports a drive path (OS names, "/a/b.txt") whose content
+	// must stay on this PC: the hook for keep-offline folders. Nil keeps
+	// nothing beyond the release rules.
+	KeepOffline func(path string) bool
+	Logger      *slog.Logger
 }

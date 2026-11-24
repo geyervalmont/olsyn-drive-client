@@ -41,6 +41,23 @@ type Bandwidth struct {
 	DownBPS int64 `json:"down_bps"`
 }
 
+// CacheRelease says how soon a file uploaded from this PC stops taking space
+// here, once the drive has confirmed it. Seconds; 0 means at once.
+type CacheRelease struct {
+	// AfterUploadSeconds is the grace period after an upload (default 300).
+	AfterUploadSeconds int64 `json:"after_upload_seconds"`
+	// KeepOpenedSeconds keeps a file an application read within this long
+	// (default 1800).
+	KeepOpenedSeconds int64 `json:"keep_opened_seconds"`
+}
+
+// Default release timings.
+const (
+	DefaultAfterUploadSeconds = 5 * 60
+	DefaultKeepOpenedSeconds  = 30 * 60
+	maxReleaseSeconds         = 7 * 24 * 60 * 60
+)
+
 // Notifications says which notifications the person wants.
 type Notifications struct {
 	Finished      bool `json:"finished"`
@@ -54,6 +71,7 @@ type Settings struct {
 	DriveLetter   string        `json:"drive_letter"`
 	CacheDir      string        `json:"cache_dir"`
 	CacheCapBytes int64         `json:"cache_cap_bytes"`
+	CacheRelease  CacheRelease  `json:"cache_release"`
 	Bandwidth     Bandwidth     `json:"bandwidth"`
 	StartAtLogin  bool          `json:"start_at_login"`
 	UpdateChannel string        `json:"update_channel"`
@@ -83,6 +101,7 @@ func Defaults(env Env) Settings {
 		DriveLetter:   DefaultDriveLetter,
 		CacheDir:      env.CacheDir,
 		CacheCapBytes: DefaultCacheCap(env.FreeDiskBytes),
+		CacheRelease:  CacheRelease{AfterUploadSeconds: DefaultAfterUploadSeconds, KeepOpenedSeconds: DefaultKeepOpenedSeconds},
 		StartAtLogin:  true,
 		UpdateChannel: "stable",
 		Notifications: Notifications{Finished: true, Held: true, SignedOut: true, UpdateApplied: true},
@@ -117,6 +136,12 @@ func (s Settings) Validate() error {
 	}
 	if s.CacheCapBytes < MinCacheCap {
 		return &FieldError{"cache_cap_bytes", fmt.Sprintf("must be at least %d bytes (1 GiB)", MinCacheCap)}
+	}
+	if v := s.CacheRelease.AfterUploadSeconds; v < 0 || v > maxReleaseSeconds {
+		return &FieldError{"cache_release.after_upload_seconds", "must be from 0 to 604800 seconds (7 days)"}
+	}
+	if v := s.CacheRelease.KeepOpenedSeconds; v < 0 || v > maxReleaseSeconds {
+		return &FieldError{"cache_release.keep_opened_seconds", "must be from 0 to 604800 seconds (7 days)"}
 	}
 	if s.Bandwidth.UpBPS < 0 {
 		return &FieldError{"bandwidth.up_bps", "must be 0 (unlimited) or more"}

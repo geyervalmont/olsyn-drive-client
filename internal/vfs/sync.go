@@ -357,7 +357,7 @@ func (fs *FS) execUpload(ctx context.Context, op *journal.Op) error {
 // finishUpload records a sent file: its cache content becomes the drive
 // version's, and the entry learns its drive id and version.
 func (fs *FS) finishUpload(ctx context.Context, id, key string, n *driveapi.Node) error {
-	if err := fs.cache.Commit(key, n.VersionID()); err != nil && !errors.Is(err, cache.ErrNotFound) {
+	if err := fs.cache.CommitUpload(key, n.VersionID(), cache.Upload{Node: id, Check: checkOf(n)}); err != nil && !errors.Is(err, cache.ErrNotFound) {
 		fs.log.Warn("vfs: commit cache", "err", err)
 	}
 	fs.treeMu.Lock()
@@ -433,7 +433,11 @@ func (fs *FS) conflictCopy(ctx context.Context, op *journal.Op, e, p *index.Entr
 			fresh = &nw.Node
 		}
 	}
-	if err := fs.cache.Commit(key, res.Node.VersionID()); err != nil && !errors.Is(err, cache.ErrNotFound) {
+	copyID := res.Node.ID // the copy's local id: a drive file's is its drive id
+	if e.ServerID == "" {
+		copyID = e.ID // our new file became the copy
+	}
+	if err := fs.cache.CommitUpload(key, res.Node.VersionID(), cache.Upload{Node: copyID, Check: checkOf(res.Node)}); err != nil && !errors.Is(err, cache.ErrNotFound) {
 		fs.log.Warn("vfs: commit cache", "err", err)
 	}
 	fs.treeMu.Lock()

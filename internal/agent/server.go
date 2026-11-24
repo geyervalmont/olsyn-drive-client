@@ -776,6 +776,9 @@ func (a *Agent) PatchSettings(ctx context.Context, patch []byte) (SettingsRespon
 	if has("cache_cap_bytes") {
 		a.opts.FS.SetCacheCap(next.CacheCapBytes)
 	}
+	if has("cache_release") {
+		a.opts.FS.SetCacheRelease(next.CacheRelease)
+	}
 	if has("start_at_login") {
 		if err := a.opts.System.SetAutostart(next.StartAtLogin); err != nil {
 			a.log.Warn("could not change start at login", "err", err)
