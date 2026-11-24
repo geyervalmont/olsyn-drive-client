@@ -23,6 +23,7 @@ export type IssueAction =
   | 'mount'
   | 'install_driver'
   | 'check_driver'
+  | 'enable_autostart'
   | 'apply_update'
   | 'check_update'
   | 'show_settings'

@@ -28,6 +28,33 @@ export class AgentUnreachableError extends Error {
   }
 }
 
+/**
+ * Raised when security software removed or blocked Olsyn Drive on this PC
+ * (the shell found the agent's program gone, refused at start, or stopped
+ * again and again). Starting it again will not help; the help page says what will.
+ */
+export class AgentBlockedError extends AgentUnreachableError {
+  readonly title: string
+  readonly detail: string
+  readonly helpUrl: string
+
+  constructor(info: BlockedInfo) {
+    super(info.title + ' ' + info.detail)
+    this.name = 'AgentBlockedError'
+    this.title = info.title
+    this.detail = info.detail
+    this.helpUrl = info.help_url
+  }
+}
+
+/** What the shell sends when security software removed or blocked the agent. */
+export interface BlockedInfo {
+  kind: string
+  title: string
+  detail: string
+  help_url: string
+}
+
 /** A short, log-safe description of why a request failed in the page: the error's name and message, never a body. */
 export function describeFailure(err: unknown): string {
   const cause = err instanceof Error && err.cause !== undefined ? err.cause : err

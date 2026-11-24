@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/geyervalmont/olsyn-drive-client/internal/agent"
+	"github.com/geyervalmont/olsyn-drive-client/internal/blocked"
 	"github.com/geyervalmont/olsyn-drive-client/internal/links"
 	"github.com/geyervalmont/olsyn-drive-client/internal/platform"
 )
@@ -44,7 +45,12 @@ func cmdStatus(e *env, args []string) int {
 	st, err := e.client().State(ctx)
 	if err != nil {
 		if *asJSON && isNoAgent(err) {
-			e.printf("{\"agent\":\"not_running\"}\n")
+			out := map[string]string{"agent": "not_running"}
+			if be := e.blockedAgent(err); be != nil {
+				out["blocked"], out["message"], out["help_url"] = string(be.Kind), be.Title()+" "+be.Detail(), blocked.HelpURL
+			}
+			data, _ := json.Marshal(out)
+			e.printf("%s\n", data)
 			return exitNoAgent
 		}
 		return e.report(err)

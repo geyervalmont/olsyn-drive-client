@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/geyervalmont/olsyn-drive-client/internal/agent"
+	"github.com/geyervalmont/olsyn-drive-client/internal/blocked"
 	"github.com/geyervalmont/olsyn-drive-client/internal/platform"
 )
 
@@ -167,6 +168,41 @@ func TestCLIAgainstAgent(t *testing.T) {
 	}
 	if code, _, _ := runCLI(t, "pause", "--minutes", "5"); code != exitOK {
 		t.Fatalf("pause: %d", code)
+	}
+}
+
+// The installed program is gone (security software removed it) and the
+// agent does not answer: the CLI says so in plain words, with the help page,
+// instead of "not running".
+func TestCLINamesARemovedProgram(t *testing.T) {
+	dir, err := os.MkdirTemp("", "odc-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	t.Setenv("OLSYN_DRIVE_HOME", dir)
+	rec := blocked.Record{Dir: platform.Under(dir).State}
+	if err := rec.NoteInstalled(filepath.Join(dir, "Programs", "Olsyn Drive", platform.ExecutableName)); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errOut := runCLI(t, "status")
+	if code != exitNoAgent {
+		t.Fatalf("exit %d", code)
+	}
+	for _, want := range []string{"removed or blocked Olsyn Drive", "Your files waiting to upload are safe.", blocked.HelpURL} {
+		if !strings.Contains(errOut, want) {
+			t.Errorf("status lacks %q:\n%s", want, errOut)
+		}
+	}
+	code, out, _ := runCLI(t, "status", "--json")
+	var js map[string]string
+	if code != exitNoAgent || json.Unmarshal([]byte(out), &js) != nil || js["blocked"] != "removed" || js["help_url"] != blocked.HelpURL {
+		t.Fatalf("status --json: %d %s", code, out)
+	}
+	// After an uninstall the program is gone on purpose: plain "not running".
+	rec.ForgetInstalled()
+	if _, _, errOut := runCLI(t, "status"); !strings.Contains(errOut, "not running") {
+		t.Fatalf("after uninstall: %s", errOut)
 	}
 }
 

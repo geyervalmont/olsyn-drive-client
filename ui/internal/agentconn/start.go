@@ -44,8 +44,13 @@ func FindAgent() (*Starter, error) {
 // String names the program for log lines.
 func (s *Starter) String() string { return s.Exe }
 
-// Start launches the agent and does not wait for it.
+// Start launches the agent and does not wait for it. A program file that is
+// gone (removed by security software, say) is an error wrapping
+// fs.ErrNotExist.
 func (s *Starter) Start() error {
+	if _, err := os.Stat(s.Exe); err != nil {
+		return fmt.Errorf("start agent %s: %w", s.Exe, err)
+	}
 	cmd := exec.Command(s.Exe, s.Args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
 	detach(cmd)

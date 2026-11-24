@@ -1591,6 +1591,12 @@ a {
 }
 .starting p {
   color: var(--ink-3);
+  max-width: 46ch;
+}
+.starting-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
 }
 
 /* ---------- Onboarding ---------- */

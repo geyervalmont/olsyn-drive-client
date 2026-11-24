@@ -40,7 +40,7 @@ func runUI(e *env, args []string) int {
 	}
 	log.Info("desktop app starting", "version", version, "background", *background)
 	opts := shell.Options{Assets: assets, Background: *background, Args: fs.Args(), Version: version, Logger: log,
-		StateFile: filepath.Join(e.paths.State, "ui-window.json")}
+		StateFile: filepath.Join(e.paths.State, "ui-window.json"), StateDir: e.paths.State}
 	if err := shell.Run(e.ctx, opts); err != nil {
 		log.Error("desktop app stopped", "err", err)
 		// Started from Explorer or at sign-in there is no console to print to.

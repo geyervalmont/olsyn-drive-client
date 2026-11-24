@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/geyervalmont/olsyn-drive-client/internal/blocked"
 	"github.com/geyervalmont/olsyn-drive-client/ui/internal/agentconn"
 )
 
@@ -65,6 +66,11 @@ func FromState(s agentconn.State) View {
 // Down is the view when the agent does not answer.
 func Down() View {
 	return View{Kind: Stopped, Progress: -1, Tooltip: "Olsyn Drive isn't running. Click to start it."}
+}
+
+// Blocked is the view when security software removed or blocked the agent.
+func Blocked(e *blocked.Error) View {
+	return View{Kind: Stopped, Progress: -1, Tooltip: tip("Olsyn Drive: " + e.Title())}
 }
 
 func fraction(t agentconn.Summary) float64 {

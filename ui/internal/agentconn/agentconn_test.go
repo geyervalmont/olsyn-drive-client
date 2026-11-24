@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/geyervalmont/olsyn-drive-client/internal/blocked"
 )
 
 // fakeAgent serves handler on a unix socket and returns a dialer for it.
@@ -138,6 +140,23 @@ func TestEnsureRunningWithoutStarter(t *testing.T) {
 	}
 	if err := a.EnsureRunning(context.Background()); err == nil {
 		t.Fatal("expected an error with no starter")
+	}
+}
+
+// The agent's program file is gone (security software removed it): the
+// start is recorded and the error names it, so the app can say so.
+func TestEnsureRunningNamesARemovedProgram(t *testing.T) {
+	dir := t.TempDir()
+	rec := &blocked.Record{Dir: dir}
+	a := &Agent{HTTP: NewHTTPClient(UnixDialer{Path: filepath.Join(os.TempDir(), "odui-missing.sock")}), UserAgent: "test",
+		Starter: &Starter{Exe: filepath.Join(dir, "gone", "olsyn-drive"), Args: []string{"agent"}}, Blocks: rec}
+	err := a.EnsureRunning(context.Background())
+	var be *blocked.Error
+	if !errors.As(err, &be) || be.Kind != blocked.Removed {
+		t.Fatalf("EnsureRunning = %v", err)
+	}
+	if n := rec.RecentStarts(time.Minute); n != 1 {
+		t.Fatalf("starts recorded: %d", n)
 	}
 }
 

@@ -88,8 +88,26 @@ function useRefreshOnActivate(refresh: () => void) {
 
 function Starting() {
   const view = useAgentView()
-  const { connection } = useAgentContext()
+  const { connection, shell } = useAgentContext()
   const unreachable = view.stream === 'unreachable'
+  const blocked = view.blocked
+  if (blocked) {
+    return (
+      <main className="starting">
+        <LetterMark letter="W:" tone="danger" progress={null} size={72} />
+        <h1 className="display">{blocked.title}</h1>
+        <p>{blocked.detail} They stay on this PC and carry on uploading once Olsyn Drive is allowed and installed again.</p>
+        <div className="starting-actions">
+          <Button variant="primary" onClick={() => shell.openUrl(blocked.helpUrl)}>
+            What to do
+          </Button>
+          <Button variant="secondary" icon="refresh" onClick={() => connection.retryNow()}>
+            Try again
+          </Button>
+        </div>
+      </main>
+    )
+  }
   return (
     <main className="starting" aria-busy={!unreachable}>
       <LetterMark letter="W:" tone={unreachable ? 'danger' : 'off'} progress={null} size={72} />

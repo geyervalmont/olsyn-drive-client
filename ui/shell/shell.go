@@ -28,6 +28,10 @@ type Options struct {
 	// StateFile is where the main window's size and place are kept between
 	// runs; empty keeps nothing.
 	StateFile string
+	// StateDir is the data folder's state directory, where agent starts
+	// and the install are recorded to recognise security software removing
+	// or blocking the program (internal/blocked); empty records nothing.
+	StateDir string
 }
 
 // AppID names the single-instance lock and the notification sender.

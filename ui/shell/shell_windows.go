@@ -16,6 +16,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 	"github.com/wailsapp/wails/v3/pkg/w32"
 
+	"github.com/geyervalmont/olsyn-drive-client/internal/blocked"
 	"github.com/geyervalmont/olsyn-drive-client/internal/links"
 	"github.com/geyervalmont/olsyn-drive-client/ui/internal/agentconn"
 	"github.com/geyervalmont/olsyn-drive-client/ui/internal/bridge"
@@ -95,6 +96,9 @@ func Run(ctx context.Context, opts Options) error {
 		agent.Starter = starter
 	} else {
 		log.Warn("cannot start the agent if it stops", "err", err)
+	}
+	if opts.StateDir != "" {
+		agent.Blocks = &blocked.Record{Dir: opts.StateDir}
 	}
 
 	s := &shell{ctx: ctx, log: log, agent: agent, stateFile: opts.StateFile}
@@ -337,6 +341,11 @@ func (s *shell) watch() {
 		Notification: s.notify,
 		Down: func(err error) {
 			s.log.Warn("agent not answering", "err", err)
+			var be *blocked.Error
+			if errors.As(err, &be) {
+				s.applyView(tray.Blocked(be))
+				return
+			}
 			s.applyView(tray.Down())
 		},
 	})

@@ -122,6 +122,8 @@ other keys are extra detail named per code below.
   `held_files` (`show_held`), `mount_failed` (`mount`), `driver_missing` / `driver_outdated` (`install_driver`; `check_driver`
   after a failed download, which `POST /v1/driver/check` answers),
   `update_required` (`apply_update`), `update_failed` (`check_update`), `cache_full` (`show_settings`),
+  `autostart_missing` (`enable_autostart`: start at login is on in the settings but its entry was removed; the UI
+  offers `PATCH /v1/settings {"start_at_login": true}` or `false`, and the agent never re-adds it by itself),
   `credential_store` (`sign_in`).
 - `ready`: false until start-up has finished (sign-in state loaded and, when the drive was mounted before,
   the mount is back or has failed). Used by the update health check.

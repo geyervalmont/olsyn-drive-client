@@ -778,6 +778,12 @@ func (a *Agent) PatchSettings(ctx context.Context, patch []byte) (SettingsRespon
 	has := func(prefix string) bool {
 		return slices.ContainsFunc(changed, func(c string) bool { return c == prefix || strings.HasPrefix(c, prefix+".") })
 	}
+	// start_at_login sent unchanged while its entry is missing: the person
+	// chose to turn it back on (the issue's action).
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(patch, &fields)
+	_, sentAutostart := fields["start_at_login"]
+	reapplyAutostart := has("start_at_login") || (sentAutostart && a.autostartMissing)
 	if has("server_url") && a.opts.Server != "" {
 		a.mu.Unlock()
 		return SettingsResponse{}, &settings.FieldError{Field: "server_url", Message: "This build connects only to " + a.opts.Server + "."}
@@ -821,10 +827,13 @@ func (a *Agent) PatchSettings(ctx context.Context, patch []byte) (SettingsRespon
 	if has("cache_release") {
 		a.opts.FS.SetCacheRelease(next.CacheRelease)
 	}
-	if has("start_at_login") {
+	if reapplyAutostart {
 		if err := a.opts.System.SetAutostart(next.StartAtLogin); err != nil {
 			a.log.Warn("could not change start at login", "err", err)
 		}
+		a.mu.Lock()
+		a.checkAutostartLocked()
+		a.mu.Unlock()
 	}
 	if has("update_channel") && a.opts.Updater != nil {
 		go a.CheckUpdate(runCtx)

@@ -36,6 +36,7 @@ type quietSystem struct{}
 func (quietSystem) OpenURL(context.Context, string) error    { return nil }
 func (quietSystem) OpenFolder(context.Context, string) error { return nil }
 func (quietSystem) SetAutostart(bool) error                  { return nil }
+func (quietSystem) AutostartEnabled() (bool, error)          { return false, platform.ErrNotImplemented }
 func (quietSystem) DetectDriver() (platform.DriverInfo, error) {
 	return platform.DriverInfo{Name: "none"}, nil
 }

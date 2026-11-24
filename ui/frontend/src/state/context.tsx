@@ -51,7 +51,7 @@ export function errorText(err: unknown): string {
 
 /** True when Olsyn Drive itself did not answer (not running yet, or starting), as opposed to an answer saying no. */
 export function unreachableError(err: unknown): boolean {
-  return err instanceof AgentUnreachableError || (err instanceof AgentError && err.code === 'agent_unreachable')
+  return err instanceof AgentUnreachableError || (err instanceof AgentError && (err.code === 'agent_unreachable' || err.code === 'agent_blocked'))
 }
 
 /**

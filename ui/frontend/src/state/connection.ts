@@ -2,6 +2,7 @@
 // listen to raw events (the transfer lists need every transfer change).
 // Reconnects with backoff 0.25 s doubling to 5 s, resuming with Last-Event-ID.
 
+import { AgentBlockedError } from '../api/errors'
 import type { AgentClient } from '../api/client'
 import type { IncomingEvent } from '../api/types'
 import type { Store } from './store'
@@ -93,11 +94,13 @@ export class AgentConnection {
         }
         for (const l of [...this.listeners]) l(event)
       },
-      onError: () => {
+      onError: (err) => {
         this.close = null
         if (this.stopped) return
         this.failures += 1
-        this.store.dispatch({ type: 'stream', status: this.failures >= UNREACHABLE_AFTER ? 'unreachable' : 'reconnecting' })
+        const blocked = err instanceof AgentBlockedError ? { title: err.title, detail: err.detail, helpUrl: err.helpUrl } : null
+        if (blocked || this.store.getState().blocked) this.store.dispatch({ type: 'blocked', blocked })
+        this.store.dispatch({ type: 'stream', status: blocked || this.failures >= UNREACHABLE_AFTER ? 'unreachable' : 'reconnecting' })
         const delay = Math.min(BACKOFF_MAX_MS, BACKOFF_START_MS * 2 ** Math.max(0, this.failures - 1))
         this.timer = setTimeout(() => {
           this.timer = null

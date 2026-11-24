@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/geyervalmont/olsyn-drive-client/internal/blocked"
 )
 
 // Launcher starts the agent without waiting for it (a *Starter in the app).
@@ -24,6 +26,9 @@ type Agent struct {
 	UserAgent string
 	Starter   Launcher
 	Log       *slog.Logger
+	// Blocks, when set, records each start and names security software
+	// when the agent cannot be started or keeps stopping (*blocked.Error).
+	Blocks *blocked.Record
 
 	ensureMu sync.Mutex
 }
@@ -137,7 +142,13 @@ func (a *Agent) EnsureRunning(ctx context.Context) error {
 	if a.Starter == nil {
 		return errors.New("the agent is not running and no way to start it is configured")
 	}
+	if a.Blocks != nil {
+		if err := a.Blocks.NoteStart(); err != nil {
+			a.warn("could not record the agent start", "err", err)
+		}
+	}
 	if err := a.Starter.Start(); err != nil {
+		err = a.explain(err)
 		a.warn("could not start the agent", "err", err)
 		return err
 	}
@@ -156,7 +167,16 @@ func (a *Agent) EnsureRunning(ctx context.Context) error {
 			return nil
 		}
 	}
-	err := fmt.Errorf("the agent did not answer within %s of starting", StartWait)
+	err := a.explain(fmt.Errorf("the agent did not answer within %s of starting", StartWait))
 	a.warn("the started agent is not answering", "err", err)
 	return err
+}
+
+// explain names security software as the cause of err when the recorded
+// facts point to it.
+func (a *Agent) explain(err error) error {
+	if a.Blocks == nil {
+		return err
+	}
+	return a.Blocks.Explain(err)
 }

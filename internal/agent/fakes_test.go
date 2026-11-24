@@ -270,8 +270,11 @@ type fakeSystem struct {
 	urls      []string
 	folders   []string
 	autostart *bool
-	driver    platform.DriverInfo
-	routes    []string
+	// entry is the start-at-login entry as AutostartEnabled sees it; nil:
+	// it cannot be told
+	entry  *bool
+	driver platform.DriverInfo
+	routes []string
 	// lettersInUse overrides the default (only D: taken)
 	lettersInUse map[string]string
 	// install runs for InstallDriver; nil declines the prompt.
@@ -296,7 +299,19 @@ func (s *fakeSystem) SetAutostart(on bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.autostart = &on
+	if s.entry != nil {
+		s.entry = &on
+	}
 	return nil
+}
+
+func (s *fakeSystem) AutostartEnabled() (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.entry == nil {
+		return false, platform.ErrNotImplemented
+	}
+	return *s.entry, nil
 }
 
 func (s *fakeSystem) DetectDriver() (platform.DriverInfo, error) {

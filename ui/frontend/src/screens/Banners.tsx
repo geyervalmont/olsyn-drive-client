@@ -16,15 +16,28 @@ interface BannerModel {
   title: string
   body?: string
   action?: { label: string; run: () => Promise<unknown> | void }
+  /** A second, quieter choice (e.g. "Leave off"). */
+  secondary?: { label: string; run: () => Promise<unknown> | void }
 }
 
 export function useBanners(navigate: (route: string) => void): BannerModel[] {
   const view = useAgentView()
-  const { client, connection } = useAgentContext()
+  const { client, connection, shell } = useAgentContext()
   const state = view.state
   const banners: BannerModel[] = []
 
-  if (view.stream === 'unreachable') {
+  if (view.blocked) {
+    const blocked = view.blocked
+    banners.push({
+      key: 'blocked',
+      tone: 'danger',
+      icon: 'shield',
+      title: blocked.title,
+      body: blocked.detail,
+      action: { label: 'What to do', run: () => shell.openUrl(blocked.helpUrl) },
+      secondary: { label: 'Try again', run: () => connection.retryNow() },
+    })
+  } else if (view.stream === 'unreachable') {
     banners.push({
       key: 'unreachable',
       tone: 'danger',
@@ -93,6 +106,14 @@ function issueBanner(issue: Issue, client: ReturnType<typeof useAgentContext>['c
       return { ...base, icon: 'hold', body: 'They are kept on this PC, not on the drive. Choose what to do with each one.', action: { label: 'Show files', run: () => navigate('transfers/held') } }
     case 'install_driver':
       return { ...base, icon: 'shield', body: 'Windows will ask for permission once.', action: { label: 'Install', run: () => client.installDriver() } }
+    case 'enable_autostart':
+      return {
+        ...base,
+        icon: 'gear',
+        body: 'Turn it back on so the drive is there when you sign in. Nothing changes until you choose.',
+        action: { label: 'Turn back on', run: () => client.patchSettings({ start_at_login: true }) },
+        secondary: { label: 'Leave off', run: () => client.patchSettings({ start_at_login: false }) },
+      }
     case 'check_driver':
       return { ...base, icon: 'shield', action: { label: 'Check again', run: () => client.checkDriver() } }
     case 'mount':
@@ -136,6 +157,11 @@ function Banner({ model, compact }: { model: BannerModel; compact: boolean }) {
         {model.body && !compact && <p className="banner-body">{model.body}</p>}
         {error && <p className="banner-error">{error.message}</p>}
       </div>
+      {model.secondary && (
+        <Button size="s" variant="ghost" pending={pending === 'b'} onClick={() => void run('b', async () => model.secondary!.run())}>
+          {model.secondary.label}
+        </Button>
+      )}
       {model.action && (
         <Button size="s" variant={urgent ? 'primary' : 'secondary'} pending={pending === 'a'} onClick={() => void run('a', async () => model.action!.run())}>
           {model.action.label}

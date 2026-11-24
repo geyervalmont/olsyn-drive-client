@@ -50,6 +50,9 @@ export function workingLine(state: State): StatusLine {
 export function statusLine(view: AgentView): StatusLine {
   const state = view.state
   if (!state) {
+    if (view.blocked) {
+      return { tone: 'danger', title: view.blocked.title, detail: view.blocked.detail, progress: null }
+    }
     if (view.stream === 'unreachable') {
       return { tone: 'danger', title: "Olsyn Drive isn't running.", detail: 'Starting it again. This usually takes a few seconds.', progress: null }
     }

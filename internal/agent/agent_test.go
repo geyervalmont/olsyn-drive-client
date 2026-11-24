@@ -806,6 +806,37 @@ func TestDriverDownloadFailedThenInstalledByHand(t *testing.T) {
 	}
 }
 
+// A start-at-login entry that went missing (removed by security software,
+// say) is offered again as an issue; it is never re-added silently, and
+// turning it back on from the app clears the issue.
+func TestAutostartMissingIsOfferedNotReadded(t *testing.T) {
+	off := false
+	h := newHarness(t, func(h *harness) {
+		seedAccount(h)
+		h.system.entry = &off
+	})
+	s := h.waitState("autostart issue", func(s State) bool {
+		return s.Ready && slices.ContainsFunc(s.Issues, func(i Issue) bool { return i.Code == "autostart_missing" && i.Action == "enable_autostart" })
+	})
+	h.system.mu.Lock()
+	readded := h.system.autostart != nil
+	h.system.mu.Unlock()
+	if readded {
+		t.Fatalf("start at login was changed without the person: %+v", s.Issues)
+	}
+	if err := h.client.Do(context.Background(), http.MethodPatch, "/v1/settings", map[string]any{"start_at_login": true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.waitState("issue gone", func(s State) bool {
+		return !slices.ContainsFunc(s.Issues, func(i Issue) bool { return i.Code == "autostart_missing" })
+	})
+	h.system.mu.Lock()
+	defer h.system.mu.Unlock()
+	if h.system.entry == nil || !*h.system.entry {
+		t.Fatal("start at login was not turned back on")
+	}
+}
+
 // A declined prompt leaves the driver missing with a "declined" error.
 func TestDriverInstallDeclined(t *testing.T) {
 	h := newHarness(t, func(h *harness) {

@@ -110,18 +110,22 @@ type Agent struct {
 	upd             updateState
 	driver          Driver
 	driverRestart   bool // the driver installer asked for a restart of Windows
-	ready           bool
-	readyFired      bool
-	sessionCancel   context.CancelFunc
-	sessionDone     chan struct{}
-	lastState       []byte
-	transferStates  map[string]string
-	notifySeq       int
-	linkedOnce      bool
-	activity        *activityLog
-	exit            chan Exit
-	exitOnce        sync.Once
-	ctx             context.Context // Run's context, for background work
+	// autostartMissing: start at login is on in the settings but its entry
+	// is gone (removed by the person, a cleanup tool or security software).
+	// It is offered again in the app, never re-added silently.
+	autostartMissing bool
+	ready            bool
+	readyFired       bool
+	sessionCancel    context.CancelFunc
+	sessionDone      chan struct{}
+	lastState        []byte
+	transferStates   map[string]string
+	notifySeq        int
+	linkedOnce       bool
+	activity         *activityLog
+	exit             chan Exit
+	exitOnce         sync.Once
+	ctx              context.Context // Run's context, for background work
 }
 
 // Phases.
@@ -231,7 +235,29 @@ func New(opts Options) (*Agent, error) {
 	}
 	a.driver.MinVersion = opts.DriverMinVersion
 	a.refreshDriverLocked()
+	a.checkAutostartLocked()
 	return a, nil
+}
+
+// checkAutostartLocked notes a start-at-login entry that the settings want
+// but that is gone. It only looks: the person turns it back on (PATCH
+// start_at_login), or off, from the app.
+func (a *Agent) checkAutostartLocked() {
+	a.autostartMissing = false
+	if !a.settings.StartAtLogin {
+		return
+	}
+	on, err := a.opts.System.AutostartEnabled()
+	if err != nil {
+		if !errors.Is(err, platform.ErrNotImplemented) {
+			a.log.Warn("could not check start at login", "err", err)
+		}
+		return
+	}
+	a.autostartMissing = !on
+	if !on {
+		a.log.Warn("start at login is on in the settings but its entry is missing; offering it again")
+	}
 }
 
 func letterPtr(l string) *string {
@@ -392,6 +418,9 @@ func (a *Agent) issuesLocked(fs FSStatus) []Issue {
 	}
 	if n := fs.Summary.Held; n > 0 {
 		issues = append(issues, Issue{"held_files", plural(n, "file", "files") + " could not be uploaded to the drive.", "show_held"})
+	}
+	if a.autostartMissing {
+		issues = append(issues, Issue{"autostart_missing", "Olsyn Drive no longer starts when you sign in to Windows: its start-at-login entry was removed.", "enable_autostart"})
 	}
 	if a.mount.State == MountFailed {
 		msg := "The drive could not be connected."

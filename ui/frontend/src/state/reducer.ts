@@ -16,8 +16,17 @@ export type StreamStatus = 'connecting' | 'live' | 'reconnecting' | 'unreachable
 /** A transfer plus the time this UI received it, for smooth progress between events. */
 export type LiveTransfer = Transfer & { receivedAt: number }
 
+/** Security software removed or blocked Olsyn Drive: what to tell the person. */
+export interface Blocked {
+  title: string
+  detail: string
+  helpUrl: string
+}
+
 export interface AgentView {
   stream: StreamStatus
+  /** Set while the agent cannot run because security software removed or blocked it. */
+  blocked: Blocked | null
   state: State | null
   /** Active and waiting transfers, in queue order (the snapshot's first 50 plus what events add). */
   live: LiveTransfer[]
@@ -40,6 +49,7 @@ export const BATCH_LIMIT = 20
 
 export const initialView: AgentView = {
   stream: 'connecting',
+  blocked: null,
   state: null,
   live: [],
   recent: [],
@@ -53,6 +63,7 @@ export const initialView: AgentView = {
 
 export type Action =
   | { type: 'stream'; status: StreamStatus }
+  | { type: 'blocked'; blocked: Blocked | null }
   | { type: 'event'; event: IncomingEvent; at: number }
   | { type: 'settings'; settings: Settings }
   | { type: 'state'; state: State }
@@ -104,7 +115,10 @@ function withState(view: AgentView, state: State): AgentView {
 export function reduce(view: AgentView, action: Action): AgentView {
   switch (action.type) {
     case 'stream':
+      if (action.status === 'live' && view.blocked) return { ...view, stream: action.status, blocked: null }
       return view.stream === action.status ? view : { ...view, stream: action.status }
+    case 'blocked':
+      return view.blocked === action.blocked ? view : { ...view, blocked: action.blocked }
     case 'settings':
       return { ...view, settings: action.settings }
     case 'state':

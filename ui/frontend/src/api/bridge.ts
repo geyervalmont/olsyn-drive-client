@@ -6,13 +6,13 @@
 //               window.__olsynBridge.receive(message)
 //   - shell actions (folder picker, windows, drops): /bridge/* and pushed messages
 
-import { AgentUnreachableError, describeFailure } from './errors'
+import { AgentBlockedError, AgentUnreachableError, type BlockedInfo, describeFailure } from './errors'
 import type { SSEMessage } from './sse'
 import { HttpTransport, type StreamHandlers, type Transport, type TransportResponse } from './transport'
 
 export type BridgeMessage =
   | { kind: 'stream'; status: 'open' }
-  | { kind: 'stream'; status: 'error'; message: string }
+  | { kind: 'stream'; status: 'error'; message: string; blocked?: BlockedInfo }
   | { kind: 'events'; events: SSEMessage[] }
   | { kind: 'drop'; paths: string[] }
   | { kind: 'route'; route: string }
@@ -102,7 +102,7 @@ export class BridgeTransport implements Transport {
         else {
           closed = true
           stop()
-          handlers.onError(new AgentUnreachableError(message.message))
+          handlers.onError(message.blocked ? new AgentBlockedError(message.blocked) : new AgentUnreachableError(message.message))
         }
       } else if (message.kind === 'events') {
         for (const event of message.events) handlers.onMessage(event)

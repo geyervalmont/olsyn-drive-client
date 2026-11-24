@@ -210,6 +210,10 @@ type System interface {
 	OpenURL(ctx context.Context, url string) error
 	OpenFolder(ctx context.Context, path string) error
 	SetAutostart(enabled bool) error
+	// AutostartEnabled reports whether the start-at-login entry is in place;
+	// platform.ErrNotImplemented where that cannot be told (an agent not
+	// started from the installed program, say). It never changes anything.
+	AutostartEnabled() (bool, error)
 	DetectDriver() (platform.DriverInfo, error)
 	// InstallDriver downloads the driver's installer from its publisher,
 	// verifies it and runs it elevated. progress hears each

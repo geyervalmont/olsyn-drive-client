@@ -20,6 +20,7 @@ export const scenarios = {
   empty: 'Connected with nothing moving and no history.',
   loading: 'The agent takes a few seconds to answer.',
   unreachable: 'The agent is not running at first, then starts.',
+  removed: 'Windows Security removed the program: the app says so and links to what to do.',
 } as const
 
 export type ScenarioName = keyof typeof scenarios

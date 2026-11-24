@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/geyervalmont/olsyn-drive-client/internal/blocked"
 	"github.com/geyervalmont/olsyn-drive-client/ui/internal/agentconn"
 )
 
@@ -162,13 +163,14 @@ func (b *Bridge) proxy(w http.ResponseWriter, r *http.Request) {
 		target += "?" + r.URL.RawQuery
 	}
 	resp, err := b.forward(r.Context(), r.Method, target, body)
+	var ensureErr error
 	if err != nil && agentconn.NotRunning(err) {
 		// Nothing reached the agent, so after starting it the request can be
 		// sent again, POSTs included: the page should not see the agent's
 		// first seconds as a failure.
 		b.log.Warn("agent request failed; starting the agent and trying again", "method", r.Method, "path", path, "err", err)
 		ensureCtx, cancel := context.WithTimeout(r.Context(), agentconn.StartWait+time.Second)
-		ensureErr := b.agent.EnsureRunning(ensureCtx)
+		ensureErr = b.agent.EnsureRunning(ensureCtx)
 		cancel()
 		if ensureErr == nil {
 			resp, err = b.forward(r.Context(), r.Method, target, body)
@@ -176,6 +178,14 @@ func (b *Bridge) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		b.log.Warn("agent request failed", "method", r.Method, "path", path, "err", err)
+		var be *blocked.Error
+		if errors.As(ensureErr, &be) {
+			// Security software removed or blocked the agent: starting it
+			// again would not help; say what happened.
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "agent_blocked", "message": be.Error(),
+				"title": be.Title(), "detail": be.Detail(), "help_url": blocked.HelpURL})
+			return
+		}
 		go b.ensureAgent()
 		writeError(w, http.StatusServiceUnavailable, "agent_unreachable", "Olsyn Drive isn't answering on this PC. Starting it again.")
 		return
@@ -256,10 +266,20 @@ func (b *Bridge) ensureAgent() {
 type message struct {
 	Kind    string     `json:"kind"`
 	Status  string     `json:"status,omitempty"`
+	Blocked *blockInfo `json:"blocked,omitempty"`
 	Message string     `json:"message,omitempty"`
 	Events  []sseEvent `json:"events,omitempty"`
 	Paths   []string   `json:"paths,omitempty"`
 	Route   string     `json:"route,omitempty"`
+}
+
+// blockInfo tells the page that security software removed or blocked the
+// agent, in words for a screen.
+type blockInfo struct {
+	Kind    string `json:"kind"`
+	Title   string `json:"title"`
+	Detail  string `json:"detail"`
+	HelpURL string `json:"help_url"`
 }
 
 type sseEvent struct {
@@ -378,7 +398,13 @@ func (b *Bridge) runStream(ctx context.Context, s *stream, window, lastID string
 	if ensureErr != nil {
 		msg = "Olsyn Drive isn't running on this PC."
 	}
-	b.send(window, message{Kind: "stream", Status: "error", Message: msg})
+	m := message{Kind: "stream", Status: "error", Message: msg}
+	var be *blocked.Error
+	if errors.As(ensureErr, &be) {
+		m.Message = be.Error()
+		m.Blocked = &blockInfo{Kind: string(be.Kind), Title: be.Title(), Detail: be.Detail(), HelpURL: blocked.HelpURL}
+	}
+	b.send(window, m)
 }
 
 func (b *Bridge) closeStream(w http.ResponseWriter, r *http.Request) {

@@ -19,6 +19,7 @@ import (
 	"syscall"
 
 	"github.com/geyervalmont/olsyn-drive-client/internal/agent"
+	"github.com/geyervalmont/olsyn-drive-client/internal/blocked"
 	"github.com/geyervalmont/olsyn-drive-client/internal/notices"
 	"github.com/geyervalmont/olsyn-drive-client/internal/platform"
 )
@@ -203,12 +204,34 @@ func (e *env) report(err error) int {
 	case errors.As(err, &ae):
 		e.errorf("olsyn-drive: %s\n", ae.Error())
 	case isNoAgent(err):
+		// Security software that removed or blocked the program is named
+		// as such: "not running" would send the person looking elsewhere.
+		if be := e.blockedAgent(err); be != nil {
+			e.errorf("olsyn-drive: %s\n", be.Error())
+			return exitNoAgent
+		}
 		e.errorf("olsyn-drive: the agent is not running (start it with \"olsyn-drive agent\", or sign in again)\n")
 		return exitNoAgent
 	default:
 		e.errorf("olsyn-drive: %v\n", err)
 	}
 	return exitError
+}
+
+// blockRecord is where the facts about security software blocks are kept
+// (the data folder, which survives the program being removed).
+func (e *env) blockRecord() blocked.Record {
+	return blocked.Record{Dir: e.paths.State}
+}
+
+// blockedAgent names security software as the reason the agent does not
+// answer (err, a failed connection), or returns nil. The connection error
+// itself says nothing about the program, so only the recorded facts count.
+func (e *env) blockedAgent(err error) *blocked.Error {
+	if k := e.blockRecord().Diagnose(nil); k != "" {
+		return &blocked.Error{Kind: k, Err: err}
+	}
+	return nil
 }
 
 func isNoAgent(err error) bool {

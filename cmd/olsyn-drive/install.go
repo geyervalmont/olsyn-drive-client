@@ -47,6 +47,9 @@ func cmdInstall(e *env, args []string) int {
 	if err != nil {
 		return e.report(err)
 	}
+	if res.Reinstall {
+		e.printf("Reinstalling: Olsyn Drive was missing from this PC but its data is here. Your waiting files are kept and carry on.\n")
+	}
 	e.printf("Installed Olsyn Drive %s in %s\n", version, filepath.Dir(res.Target))
 	for _, n := range res.Notes {
 		e.printf("Note: %s\n", n)
@@ -64,6 +67,9 @@ type installOptions struct {
 type installResult struct {
 	Target string   // the installed executable
 	Notes  []string // registrations this OS does not have
+	// Reinstall: the program was missing but its data folder was there
+	// (removed by the person, or by security software); the data is kept.
+	Reinstall bool
 }
 
 // installSelf puts this executable in the install folder (stopping an older
@@ -80,6 +86,7 @@ func installSelf(e *env, o installOptions) (installResult, error) {
 	}
 	target := filepath.Join(dir, platform.ExecutableName)
 	res.Target = target
+	res.Reinstall = !fileExists(target) && dataPresent(e.paths)
 	if !samePath(src, target) {
 		if fileExists(target) {
 			if err := stopInstalled(e, target); err != nil {
@@ -133,6 +140,11 @@ func installSelf(e *env, o installOptions) (installResult, error) {
 	})
 	if err := notYet("the uninstall entry", err); err != nil {
 		return res, err
+	}
+	// Remembered in the data folder so that the program going missing
+	// later (security software) can be recognised and named.
+	if err := e.blockRecord().NoteInstalled(target); err != nil {
+		e.errorf("olsyn-drive: %v\n", err)
 	}
 	if o.Start {
 		now := []string{"agent"}
@@ -222,6 +234,10 @@ func cmdUninstall(e *env, args []string) int {
 		if err := step(); err != nil && !errors.Is(err, platform.ErrNotImplemented) {
 			errs = append(errs, err)
 		}
+	}
+	// The program goes on purpose: not a removal by security software.
+	if err := e.blockRecord().ForgetInstalled(); err != nil {
+		errs = append(errs, err)
 	}
 	if !*keep {
 		for _, d := range []string{e.paths.Cache, e.paths.Logs, e.paths.State, e.paths.Config} {

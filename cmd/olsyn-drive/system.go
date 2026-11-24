@@ -30,6 +30,19 @@ func (s osSystem) SetAutostart(on bool) error {
 	return platform.DisableAutostart()
 }
 
+// AutostartEnabled looks at the start-at-login entry, only for the installed
+// program (an agent run from elsewhere, a dev build say, never has one).
+func (s osSystem) AutostartEnabled() (bool, error) {
+	dir, err := platform.DefaultInstallDir()
+	if err != nil {
+		return false, err
+	}
+	if !samePath(s.exe, filepath.Join(dir, platform.ExecutableName)) {
+		return false, platform.ErrNotImplemented
+	}
+	return platform.AutostartEnabled()
+}
+
 func (s osSystem) DetectDriver() (platform.DriverInfo, error) { return platform.DetectDriver() }
 
 // driverDownloadTimeout bounds the WinFsp installer download (about 2 MB).

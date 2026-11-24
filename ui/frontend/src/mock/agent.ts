@@ -2,6 +2,7 @@
 // the same shapes as docs/ipc.md, driven by a simulated clock. Used by
 // `npm run dev` (?scenario=...) and by tests (tick() by hand).
 
+import { AgentBlockedError } from '../api/errors'
 import type { SSEMessage } from '../api/sse'
 import type {
   Account,
@@ -651,6 +652,19 @@ export class MockAgent {
     }
     const connect = () => {
       if (!open) return
+      if (this.scenario === 'removed') {
+        // What the desktop shell reports when the agent's program is gone.
+        open = false
+        subscriber.onError(
+          new AgentBlockedError({
+            kind: 'removed',
+            title: 'Windows Security removed or blocked Olsyn Drive on this PC.',
+            detail: 'Your files waiting to upload are safe.',
+            help_url: 'https://github.com/geyervalmont/olsyn-drive-client/blob/main/docs/pre-release-windows.md',
+          }),
+        )
+        return
+      }
       if (this.agentDown || this.downAttempts > 0) {
         if (this.downAttempts > 0) this.downAttempts -= 1
         open = false
