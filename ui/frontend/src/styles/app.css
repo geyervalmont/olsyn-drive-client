@@ -1718,6 +1718,36 @@ a {
   color: var(--ink-3);
   padding: 0 2px;
 }
+.onb-progress {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 14px;
+  list-style: none;
+  border-radius: var(--r-m);
+  background: var(--sheet);
+  box-shadow: var(--shadow-sheet);
+  color: var(--ink-3);
+}
+.onb-progress li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.onb-progress li.is-current {
+  color: var(--ink);
+}
+.onb-progress li.is-done {
+  color: var(--ink-2);
+}
+.onb-progress-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  color: var(--accent-text);
+}
 .code-wait {
   display: flex;
   flex-wrap: wrap;

@@ -106,10 +106,22 @@ this path: if a release needs a newer driver the client says so and offers the o
 
 ## Install
 
-A per-user install with no admin: the downloaded exe copies itself to `%LOCALAPPDATA%\Programs\Olsyn Drive`,
-registers start-at-login, the `olsyn-drive://` scheme, and an uninstall entry. The single elevated step is the
-WinFsp driver: first run detects it, explains it in one sentence, and runs its installer (one UAC prompt);
-IT can pre-install it instead. Binaries are signed; an unsigned build is for testing only.
+A per-user install with no admin, from one downloaded exe. Opened from Downloads it offers "Install Olsyn
+Drive", copies itself to `%LOCALAPPDATA%\Programs\Olsyn Drive`, registers a Start menu entry, start-at-login,
+the `olsyn-drive://` scheme and an uninstall entry (Settings > Apps runs `uninstall --interactive`, which deletes
+settings and cache unless the person asks to keep them, and never deletes unsent files without asking), then
+opens the installed copy. A newer exe opened over an installed one offers to update it: the agent quits
+cleanly (drive disconnected, queue kept on disk), the tray app is stopped, the file swapped, the new copy
+started; unsent files carry on. The same or an older exe just opens the installed copy. Dev builds do the
+same, replacing the installed copy whenever the files differ.
+
+The single elevated step is the WinFsp driver. Its unmodified MSI (2.2, pinned by size and SHA-256 in
+`internal/winfspmsi`, fetched by `make winfsp-msi`, never committed) is embedded in the exe. First run detects
+WinFsp (an installed one at least as new as required is used as it is; a Dokany network provider is noted and
+left alone), explains it in one sentence and, when needed, extracts the MSI to a temporary folder, checks its
+hash and Authenticode signature, and runs it with one UAC prompt, showing each step. A declined prompt can be
+tried again; an install that needs Windows to sign out and in says so and setup finishes after it. IT can
+pre-install WinFsp instead. Binaries are signed; an unsigned build is for testing only.
 
 ## Interface
 

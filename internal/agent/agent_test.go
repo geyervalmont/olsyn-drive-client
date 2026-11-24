@@ -30,10 +30,10 @@ type harness struct {
 	system  *fakeSystem
 	creds   *platform.MemoryCredentialStore
 	// store replaces creds as the agent's store when set.
-	store platform.CredentialStore
-	paths platform.Paths
-	cancel  context.CancelFunc
-	done    chan Exit
+	store  platform.CredentialStore
+	paths  platform.Paths
+	cancel context.CancelFunc
+	done   chan Exit
 }
 
 // newHarness runs an agent on a real unix socket in a short temp dir (the
@@ -290,7 +290,9 @@ func TestSignInDenied(t *testing.T) {
 }
 
 // lockedStore is Credential Manager in an SSH session: nothing can be written.
-type lockedStore struct{ *platform.MemoryCredentialStore }
+type lockedStore struct {
+	*platform.MemoryCredentialStore
+}
 
 func (lockedStore) Set(string, []byte) error {
 	return errors.New("write credential: A specified logon session does not exist")
@@ -702,6 +704,67 @@ func TestStartsSignedOutWhenTokenMissing(t *testing.T) {
 	s := h.waitState("signed out", func(s State) bool { return s.Connection == ConnSignedOut && s.Ready })
 	if s.Reason == nil || s.Reason.Code != "token_missing" {
 		t.Fatalf("reason = %+v", s.Reason)
+	}
+}
+
+// The install reports its steps, then a restart of Windows is needed: the
+// driver is shown as restart_needed and the mount waits for it.
+func TestDriverInstallProgressThenRestartNeeded(t *testing.T) {
+	release := make(chan struct{})
+	h := newHarness(t, func(h *harness) {
+		seedAccount(h)
+		h.system.driver = platform.DriverInfo{Name: "winfsp", Needed: true, Others: []string{"dokany"}}
+		h.system.install = func(progress func(string)) error {
+			progress(platform.DriverStepPreparing)
+			progress(platform.DriverStepApproval)
+			<-release
+			progress(platform.DriverStepInstalling)
+			h.system.mu.Lock()
+			h.system.driver = platform.DriverInfo{Name: "winfsp", Needed: true, Installed: true, Version: "2.2.26323"}
+			h.system.mu.Unlock()
+			return platform.ErrRestartNeeded
+		}
+	})
+	s := h.waitState("driver missing", func(s State) bool { return s.Driver.State == "missing" && s.Ready })
+	if len(s.Driver.Others) != 1 || s.Driver.Others[0] != "dokany" {
+		t.Fatalf("others = %v", s.Driver.Others)
+	}
+	if err := h.post("/v1/driver/install", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.waitState("approval", func(s State) bool {
+		return s.Driver.State == "installing" && s.Driver.Progress == platform.DriverStepApproval
+	})
+	close(release)
+	s = h.waitState("restart needed", func(s State) bool { return s.Driver.State == "restart_needed" })
+	if s.Driver.Error == nil || s.Driver.Error.Code != "restart_needed" || s.Driver.Progress != "" {
+		t.Fatalf("driver = %+v", s.Driver)
+	}
+	if !slices.ContainsFunc(s.Issues, func(i Issue) bool { return i.Code == "driver_restart_needed" }) {
+		t.Fatalf("issues = %+v", s.Issues)
+	}
+	var ae *APIError
+	if err := h.post("/v1/mount", map[string]string{"letter": "W:"}, nil); !errors.As(err, &ae) || ae.Code != "driver_restart_needed" {
+		t.Fatalf("mount before restart: %v", err)
+	}
+	if err := h.post("/v1/driver/install", nil, nil); !errors.As(err, &ae) || ae.Code != "driver_restart_needed" {
+		t.Fatalf("install again: %v", err)
+	}
+}
+
+// A declined prompt leaves the driver missing with a "declined" error.
+func TestDriverInstallDeclined(t *testing.T) {
+	h := newHarness(t, func(h *harness) {
+		seedAccount(h)
+		h.system.driver = platform.DriverInfo{Name: "winfsp", Needed: true}
+	})
+	h.waitState("driver missing", func(s State) bool { return s.Driver.State == "missing" && s.Ready })
+	if err := h.post("/v1/driver/install", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	s := h.waitState("declined", func(s State) bool { return s.Driver.Error != nil })
+	if s.Driver.State != "missing" || s.Driver.Error.Code != "declined" {
+		t.Fatalf("driver = %+v", s.Driver)
 	}
 }
 

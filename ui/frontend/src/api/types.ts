@@ -104,7 +104,10 @@ export interface Update {
   apply?: 'when_idle' | 'now'
 }
 
-export type DriverState = 'ok' | 'missing' | 'outdated' | 'installing' | 'not_needed' | 'unknown'
+export type DriverState = 'ok' | 'missing' | 'outdated' | 'installing' | 'restart_needed' | 'not_needed' | 'unknown'
+
+/** While installing: checking the installer, the Windows prompt is up, the installer runs. */
+export type DriverProgress = 'preparing' | 'approval' | 'installing'
 
 export interface Driver {
   state: DriverState
@@ -112,6 +115,9 @@ export interface Driver {
   version: string | null
   min_version: string | null
   error?: CodeMessage | null
+  progress?: DriverProgress
+  /** Other file system providers found (e.g. "dokany"); they coexist. */
+  others?: string[]
 }
 
 export interface State {

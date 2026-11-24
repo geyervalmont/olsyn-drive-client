@@ -39,11 +39,11 @@ func (quietSystem) SetAutostart(bool) error                  { return nil }
 func (quietSystem) DetectDriver() (platform.DriverInfo, error) {
 	return platform.DriverInfo{Name: "none"}, nil
 }
-func (quietSystem) InstallDriver(context.Context) error  { return nil }
-func (quietSystem) DriveLettersInUse() (map[string]string, error) { return nil, nil }
-func (quietSystem) DownloadsDir() (string, error)        { return os.TempDir(), nil }
-func (quietSystem) FreeDiskBytes(string) (uint64, error) { return 100 << 30, nil }
-func (quietSystem) ShowUI(context.Context, string) error { return agent.ErrNoUI }
+func (quietSystem) InstallDriver(context.Context, func(string)) error { return nil }
+func (quietSystem) DriveLettersInUse() (map[string]string, error)     { return nil, nil }
+func (quietSystem) DownloadsDir() (string, error)                     { return os.TempDir(), nil }
+func (quietSystem) FreeDiskBytes(string) (uint64, error)              { return 100 << 30, nil }
+func (quietSystem) ShowUI(context.Context, string) error              { return agent.ErrNoUI }
 
 type noMount struct{}
 

@@ -206,6 +206,7 @@ export class MockAgent {
 
   /** The person has chosen the drive letter (first run: not yet). */
   private letterConfirmed = true
+  private declinedOnce = false
   /** Letters something else holds on this "PC". */
   private lettersInUse: Record<string, LetterUse> = { 'D:': 'volume' }
 
@@ -215,9 +216,9 @@ export class MockAgent {
 
   private setup() {
     const s = this.scenario
-    if (s === 'first-run' || s === 'signin' || s === 'link-expired' || s === 'letter-taken') {
+    if (s === 'first-run' || s === 'signin' || s === 'link-expired' || s === 'letter-taken' || s === 'driver-restart' || s === 'driver-declined') {
       this.letterConfirmed = false
-      if (s === 'first-run') this.driver = { state: 'missing', name: 'winfsp', version: null, min_version: '2.0', error: null }
+      if (s === 'first-run' || s === 'driver-restart' || s === 'driver-declined') this.driver = { state: 'missing', name: 'winfsp', version: null, min_version: '2.0', error: null }
       if (s === 'letter-taken') this.lettersInUse = { 'D:': 'volume', 'O:': 'network', 'W:': 'network' }
       return
     }
@@ -490,6 +491,9 @@ export class MockAgent {
     if (!this.account) return issues
     if (this.held.length) {
       issues.push({ code: 'held_files', message: plural(this.held.length, 'file') + " couldn't be saved to the drive.", action: 'show_held' })
+    }
+    if (this.driver.state === 'restart_needed') {
+      issues.push({ code: 'driver_restart_needed', message: 'WinFsp is installed. Sign out of Windows and back in (or restart) to finish, then the drive connects.', action: '' })
     }
     if (this.driver.state === 'missing' || this.driver.state === 'outdated') {
       issues.push({ code: 'driver_' + this.driver.state, message: 'Olsyn Drive needs a small Windows component (WinFsp) before W: can appear.', action: 'install_driver' })
@@ -999,6 +1003,7 @@ export class MockAgent {
   private doMount(letter?: string): MockResponse {
     if (!this.account) return err(409, 'not_signed_in', 'Sign in first.')
     if (this.driver.state === 'missing' || this.driver.state === 'installing') return err(409, 'driver_missing', 'Install the driver first.')
+    if (this.driver.state === 'restart_needed') return err(409, 'driver_restart_needed', 'Sign out of Windows and back in to finish adding WinFsp.')
     if (this.mount.state === 'mounted') return ok({ mount: this.mount })
     if (letter !== undefined) {
       const l = letter.toUpperCase().replace(/:?$/, ':')
@@ -1020,9 +1025,26 @@ export class MockAgent {
   }
 
   private installDriver(): MockResponse {
-    this.driver = { ...this.driver, state: 'installing', error: null }
-    this.at(3.5, () => {
-      this.driver = { state: 'ok', name: 'winfsp', version: '2.2.25089', min_version: '2.0', error: null }
+    if (this.driver.state === 'restart_needed') return err(409, 'driver_restart_needed', 'Sign out of Windows and back in to finish adding WinFsp.')
+    if (this.driver.state === 'installing') return ok(this.driver, 202)
+    this.driver = { ...this.driver, state: 'installing', progress: 'preparing', error: null }
+    this.at(0.8, () => (this.driver = { ...this.driver, progress: 'approval' }))
+    if (this.scenario === 'driver-declined' && !this.declinedOnce) {
+      this.declinedOnce = true
+      this.at(2.5, () => {
+        this.driver = { state: 'missing', name: 'winfsp', version: null, min_version: '2.0', error: { code: 'declined', message: 'The administrator prompt was declined.' } }
+      })
+      return ok(this.driver, 202)
+    }
+    this.at(2.3, () => (this.driver = { ...this.driver, progress: 'installing' }))
+    if (this.scenario === 'driver-restart') {
+      this.at(4, () => {
+        this.driver = { state: 'restart_needed', name: 'winfsp', version: '2.2.26323', min_version: '2.0', error: { code: 'restart_needed', message: 'WinFsp is installed. Sign out of Windows and back in (or restart) to finish.' } }
+      })
+      return ok(this.driver, 202)
+    }
+    this.at(4, () => {
+      this.driver = { state: 'ok', name: 'winfsp', version: '2.2.26323', min_version: '2.0', error: null }
       if (this.account && this.mount.state === 'failed') {
         this.mount = { ...this.mount, state: 'unmounted', error: null }
         this.doMount()

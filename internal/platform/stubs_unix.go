@@ -32,7 +32,21 @@ func UnregisterUninstall() error { return ErrNotImplemented }
 func DetectDriver() (DriverInfo, error) { return DriverInfo{Name: "", Needed: false}, nil }
 
 // InstallDriver is Windows only.
-func InstallDriver(context.Context, string, string, string) error { return ErrNotImplemented }
+func InstallDriver(context.Context, string, string, string, func(string)) error {
+	return ErrNotImplemented
+}
+
+// CreateStartMenuShortcut is Windows only.
+func CreateStartMenuShortcut(string) error { return ErrNotImplemented }
+
+// RemoveStartMenuShortcut is Windows only.
+func RemoveStartMenuShortcut() error { return ErrNotImplemented }
+
+// InstalledVersion is Windows only (it reads the uninstall entry).
+func InstalledVersion() (string, error) { return "", ErrNotImplemented }
+
+// StopProgram is Windows only.
+func StopProgram(context.Context, string) error { return ErrNotImplemented }
 
 // DriveLettersInUse is nil outside Windows: there are no drive letters.
 func DriveLettersInUse() (map[string]string, error) { return nil, nil }

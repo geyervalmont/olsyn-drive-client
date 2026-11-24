@@ -11,12 +11,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/geyervalmont/olsyn-drive-client/internal/agent"
 	"github.com/geyervalmont/olsyn-drive-client/internal/platform"
 )
 
 // cmdInstall copies this executable into the per-user program folder and
-// registers start-at-login, the olsyn-drive:// scheme and the uninstall entry.
-// Nothing here needs administrator rights.
+// registers start-at-login, the olsyn-drive:// scheme, a Start menu entry
+// and the uninstall entry. Nothing here needs administrator rights. Over an
+// older installed copy it is the upgrade: the running agent is asked to quit
+// (disconnecting the drive), the files are swapped and it starts again.
+// Settings, cache and files not yet sent live in the data folder, which is
+// left alone.
 func cmdInstall(e *env, args []string) int {
 	fs := newFlags(e, "install")
 	user := fs.Bool("user", false, "install for the current user (the only mode)")
@@ -29,47 +34,79 @@ func cmdInstall(e *env, args []string) int {
 		e.errorf("usage: olsyn-drive install --user\n")
 		return exitUsage
 	}
-	dir, err := platform.DefaultInstallDir()
+	res, err := installSelf(e, installOptions{Autostart: !*noAutostart, Start: !*noStart})
 	if err != nil {
 		return e.report(err)
 	}
-	src, err := os.Executable()
-	if err == nil {
-		src, err = filepath.EvalSymlinks(src)
+	e.printf("Installed Olsyn Drive %s in %s\n", version, filepath.Dir(res.Target))
+	for _, n := range res.Notes {
+		e.printf("Note: %s\n", n)
 	}
+	e.printf("Sign in with: %s login\n", quoteArg(res.Target))
+	return exitOK
+}
+
+type installOptions struct {
+	Autostart bool // start at login
+	Start     bool // start the installed copy now
+}
+
+type installResult struct {
+	Target string   // the installed executable
+	Notes  []string // registrations this OS does not have
+}
+
+// installSelf puts this executable in the install folder (stopping an older
+// copy first) and registers it.
+func installSelf(e *env, o installOptions) (installResult, error) {
+	var res installResult
+	dir, err := platform.DefaultInstallDir()
 	if err != nil {
-		return e.report(fmt.Errorf("find own executable: %w", err))
+		return res, err
+	}
+	src, err := ownExecutable()
+	if err != nil {
+		return res, err
 	}
 	target := filepath.Join(dir, platform.ExecutableName)
+	res.Target = target
 	if !samePath(src, target) {
-		stopAgent(e) // a running agent may hold the old executable
-		if err := installFile(src, target); err != nil {
-			return e.report(err)
-		}
-		// The WinFsp installer travels next to the executable when bundled.
-		if msi := filepath.Join(filepath.Dir(src), "winfsp.msi"); fileExists(msi) {
-			if err := installFile(msi, filepath.Join(dir, "winfsp.msi")); err != nil {
-				return e.report(err)
+		if fileExists(target) {
+			if err := stopInstalled(e, target); err != nil {
+				return res, err
 			}
 		}
+		if err := installFile(src, target); err != nil {
+			return res, err
+		}
 	}
-	var notes []string
 	// With the desktop app, sign-in starts the tray (which starts the agent
 	// when it does not answer); without it, the agent alone.
 	startArgs := []string{"agent"}
 	if hasUI {
 		startArgs = []string{"ui", "--background"}
 	}
-	if !*noAutostart {
-		if err := platform.EnableAutostart(target, startArgs); err != nil {
-			return e.report(fmt.Errorf("register start at login: %w", err))
+	notYet := func(what string, err error) error {
+		if errors.Is(err, platform.ErrNotImplemented) {
+			res.Notes = append(res.Notes, what+" is not available on this system yet")
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("register %s: %w", what, err)
+		}
+		return nil
+	}
+	if o.Autostart {
+		if err := notYet("start at login", platform.EnableAutostart(target, startArgs)); err != nil {
+			return res, err
 		}
 	}
-	if err := platform.RegisterURLScheme(target); err != nil {
-		if !errors.Is(err, platform.ErrNotImplemented) {
-			return e.report(fmt.Errorf("register olsyn-drive:// links: %w", err))
-		}
-		notes = append(notes, "olsyn-drive:// links are not registered on this system yet")
+	if err := notYet("olsyn-drive:// links", platform.RegisterURLScheme(target)); err != nil {
+		return res, err
+	}
+	if err := notYet("the Start menu entry", platform.CreateStartMenuShortcut(target)); err != nil {
+		// A missing shortcut does not stop the program from working.
+		e.errorf("olsyn-drive: %v\n", err)
 	}
 	size := uint32(0)
 	if fi, err := os.Stat(target); err == nil {
@@ -80,58 +117,100 @@ func cmdInstall(e *env, args []string) int {
 		DisplayVersion:   version,
 		Publisher:        "Olsyn",
 		InstallLocation:  dir,
-		UninstallCommand: quoteArg(target) + " uninstall",
+		UninstallCommand: quoteArg(target) + " uninstall --interactive",
 		DisplayIcon:      target,
 		EstimatedSizeKB:  size,
 	})
-	if err != nil && !errors.Is(err, platform.ErrNotImplemented) {
-		return e.report(fmt.Errorf("register uninstall entry: %w", err))
+	if err := notYet("the uninstall entry", err); err != nil {
+		return res, err
 	}
-	if !*noStart {
+	if o.Start {
 		now := []string{"agent"}
 		if hasUI {
-			now = nil // the app opens on its first-run screen and starts the agent
+			now = nil // the app opens (on its first-run screen) and starts the agent
 		}
 		if _, err := platform.StartDetached(target, now); err != nil {
-			return e.report(err)
+			return res, err
 		}
 	}
-	e.printf("Installed Olsyn Drive %s in %s\n", version, dir)
-	for _, n := range notes {
-		e.printf("Note: %s\n", n)
+	return res, nil
+}
+
+// stopInstalled stops the installed copy before it is replaced: the agent
+// is asked to quit cleanly (it disconnects the drive and keeps its queue),
+// then whatever still runs from that file (the tray app) is ended.
+func stopInstalled(e *env, target string) error {
+	if err := stopAgent(e); err != nil {
+		return err
 	}
-	e.printf("Sign in with: %s login\n", quoteArg(target))
-	return exitOK
+	ctx, cancel := context.WithTimeout(e.ctx, 30*time.Second)
+	defer cancel()
+	if err := platform.StopProgram(ctx, target); err != nil && !errors.Is(err, platform.ErrNotImplemented) {
+		return fmt.Errorf("stop the running Olsyn Drive: %w", err)
+	}
+	return nil
+}
+
+func ownExecutable() (string, error) {
+	p, err := os.Executable()
+	if err == nil {
+		p, err = filepath.EvalSymlinks(p)
+	}
+	if err != nil {
+		return "", fmt.Errorf("find own executable: %w", err)
+	}
+	return p, nil
 }
 
 // cmdUninstall stops the agent, removes the registrations and the program
-// folder. With --purge it also signs out and deletes settings, cache and logs.
+// folder, and deletes settings, cache and logs unless --keep-cache is given.
+// Files that have not reached the drive are never deleted without --yes (or,
+// with --interactive, without the person agreeing in a dialog).
 func cmdUninstall(e *env, args []string) int {
 	fs := newFlags(e, "uninstall")
-	purge := fs.Bool("purge", false, "also sign out and delete settings, cache and logs")
-	yes := fs.Bool("yes", false, "with --purge, confirm deleting files that have not reached the drive")
+	keep := fs.Bool("keep-cache", false, "keep settings and the cache (files not yet sent go on after a reinstall)")
+	yes := fs.Bool("yes", false, "delete files that have not reached the drive")
+	interactive := fs.Bool("interactive", false, "ask in dialogs (Settings > Apps runs this)")
+	fs.Bool("purge", true, "accepted for older scripts; deleting the data is the default")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
-	if *purge {
-		c := e.client()
-		body := map[string]bool{"clear_cache": true, "discard_unsent_confirmed": *yes}
-		if err := c.Do(e.ctx, http.MethodPost, "/v1/signout", body, nil); err != nil && !isNoAgent(err) {
-			if strings.Contains(err.Error(), "not reached the drive") {
-				e.errorf("%v\nRun again with --yes to delete them anyway.\n", err)
+	if *interactive {
+		if !askOKCancel("Uninstall Olsyn Drive", "Remove Olsyn Drive from this PC?\n\nYour files on the drive are not affected.") {
+			return exitOK
+		}
+		*keep = askYesNo("Uninstall Olsyn Drive", "Keep the copies of drive files on this PC, for a later reinstall?\n\nChoose No to delete them; they stay on the drive.", false)
+	}
+	if !*keep {
+		err := signOutClearing(e, *yes)
+		var ae *agent.APIError
+		if errors.As(err, &ae) && ae.Code == "unsent_data" {
+			if !*interactive {
+				e.errorf("olsyn-drive: %s\nRun again with --yes to delete them, or with --keep-cache to keep them.\n", ae.Message)
 				return exitNeedsInput
 			}
+			if askYesNo("Uninstall Olsyn Drive", ae.Message+"\n\nDelete them anyway? Choose No to keep them on this PC; they are sent when Olsyn Drive is installed again.", false) {
+				err = signOutClearing(e, true)
+			} else {
+				*keep, err = true, nil
+			}
+		}
+		if err != nil && !isNoAgent(err) {
 			e.errorf("olsyn-drive: sign-out: %v\n", err)
 		}
 	}
-	stopAgent(e)
 	var errs []error
-	for _, step := range []func() error{platform.DisableAutostart, platform.UnregisterURLScheme, platform.UnregisterUninstall} {
+	if dir, err := platform.DefaultInstallDir(); err == nil {
+		if err := stopInstalled(e, filepath.Join(dir, platform.ExecutableName)); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	for _, step := range []func() error{platform.DisableAutostart, platform.UnregisterURLScheme, platform.RemoveStartMenuShortcut, platform.UnregisterUninstall} {
 		if err := step(); err != nil && !errors.Is(err, platform.ErrNotImplemented) {
 			errs = append(errs, err)
 		}
 	}
-	if *purge {
+	if !*keep {
 		for _, d := range []string{e.paths.Cache, e.paths.Logs, e.paths.State, e.paths.Config} {
 			if d != "" {
 				if err := os.RemoveAll(d); err != nil {
@@ -146,34 +225,55 @@ func cmdUninstall(e *env, args []string) int {
 		}
 	}
 	if err := errors.Join(errs...); err != nil {
+		if *interactive {
+			showError("Olsyn Drive was not fully removed", err.Error())
+		}
 		return e.report(err)
 	}
-	e.printf("Olsyn Drive was removed.\n")
-	if !*purge {
-		e.printf("Settings and cache were kept; \"uninstall --purge\" removes them too.\n")
+	msg := "Olsyn Drive was removed."
+	if *keep {
+		msg += " Settings and cached files were kept."
 	}
+	if *interactive {
+		showInfo("Uninstall Olsyn Drive", msg)
+	}
+	e.printf("%s\n", msg)
 	return exitOK
 }
 
+// signOutClearing signs this computer out and clears the cache. Without
+// discardUnsent the agent refuses (409 unsent_data) while files have not
+// reached the drive.
+func signOutClearing(e *env, discardUnsent bool) error {
+	body := map[string]bool{"clear_cache": true, "discard_unsent_confirmed": discardUnsent}
+	return e.client().Do(e.ctx, http.MethodPost, "/v1/signout", body, nil)
+}
+
 // stopAgent asks a running agent to quit (disconnecting the drive) and waits
-// until its endpoint stops answering.
-func stopAgent(e *env) {
+// until its endpoint stops answering. No agent running is not an error; one
+// that still answers after 30 s is.
+func stopAgent(e *env) error {
 	c := e.client()
 	ctx, cancel := context.WithTimeout(e.ctx, 5*time.Second)
 	defer cancel()
 	if err := c.Do(ctx, http.MethodPost, "/v1/quit", map[string]bool{"unmount": true}, nil); err != nil {
-		return
+		return nil
 	}
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		pctx, pcancel := context.WithTimeout(e.ctx, time.Second)
 		_, err := c.State(pctx)
 		pcancel()
 		if err != nil {
-			return
+			return nil
 		}
-		time.Sleep(200 * time.Millisecond)
+		select {
+		case <-e.ctx.Done():
+			return e.ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
+	return errors.New("the running Olsyn Drive did not stop; quit it from its tray icon and try again")
 }
 
 // installFile copies src to dst through a temporary file and a rename. A

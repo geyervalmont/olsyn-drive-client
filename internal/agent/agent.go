@@ -67,6 +67,9 @@ type Options struct {
 	RolledBack *Problem
 	// OnReady is called once start-up has finished (update health, cleanup).
 	OnReady func()
+	// DriverMinVersion is the oldest installed driver this build works
+	// with; a release manifest may ask for a newer one.
+	DriverMinVersion string
 }
 
 // Agent is the daemon. Create it with New and start it with Run.
@@ -96,25 +99,26 @@ type Agent struct {
 	// letterConfirmed: the person chose the drive letter (first run: the
 	// drive stays unmounted until then)
 	letterConfirmed bool
-	paused         bool
-	pausedUntil    *time.Time
-	pauseTimer     *time.Timer
-	net            string // from heartbeats: Online, Offline, ServerRestarting
-	update         Update
-	upd            updateState
-	driver         Driver
-	ready          bool
-	readyFired     bool
-	sessionCancel  context.CancelFunc
-	sessionDone    chan struct{}
-	lastState      []byte
-	transferStates map[string]string
-	notifySeq      int
-	linkedOnce     bool
-	activity       *activityLog
-	exit           chan Exit
-	exitOnce       sync.Once
-	ctx            context.Context // Run's context, for background work
+	paused          bool
+	pausedUntil     *time.Time
+	pauseTimer      *time.Timer
+	net             string // from heartbeats: Online, Offline, ServerRestarting
+	update          Update
+	upd             updateState
+	driver          Driver
+	driverRestart   bool // the driver installer asked for a restart of Windows
+	ready           bool
+	readyFired      bool
+	sessionCancel   context.CancelFunc
+	sessionDone     chan struct{}
+	lastState       []byte
+	transferStates  map[string]string
+	notifySeq       int
+	linkedOnce      bool
+	activity        *activityLog
+	exit            chan Exit
+	exitOnce        sync.Once
+	ctx             context.Context // Run's context, for background work
 }
 
 // Phases.
@@ -222,6 +226,7 @@ func New(opts Options) (*Agent, error) {
 	} else {
 		a.letterConfirmed = st.LinkedOnce || acc != nil
 	}
+	a.driver.MinVersion = opts.DriverMinVersion
 	a.refreshDriverLocked()
 	return a, nil
 }
@@ -393,6 +398,8 @@ func (a *Agent) issuesLocked(fs FSStatus) []Issue {
 		issues = append(issues, Issue{"driver_missing", "The WinFsp driver is needed to show the drive. It installs with one administrator prompt.", "install_driver"})
 	case "outdated":
 		issues = append(issues, Issue{"driver_outdated", "A newer WinFsp driver is needed.", "install_driver"})
+	case "restart_needed":
+		issues = append(issues, Issue{"driver_restart_needed", "WinFsp is installed. Sign out of Windows and back in (or restart) to finish, then the drive connects.", ""})
 	}
 	if a.update.Required {
 		issues = append(issues, Issue{"update_required", "This version is no longer supported. Update to connect the drive.", "apply_update"})
@@ -579,9 +586,11 @@ func (a *Agent) saveAgentStateLocked() {
 
 // --- driver ---
 
+const restartNeededMessage = "WinFsp is installed. Sign out of Windows and back in (or restart) to finish."
+
 func (a *Agent) refreshDriverLocked() {
 	info, err := a.opts.System.DetectDriver()
-	d := Driver{Name: info.Name, Version: info.Version, MinVersion: a.driver.MinVersion}
+	d := Driver{Name: info.Name, Version: info.Version, MinVersion: a.driver.MinVersion, Others: info.Others}
 	switch {
 	case err != nil:
 		d.State = "unknown"
@@ -595,8 +604,14 @@ func (a *Agent) refreshDriverLocked() {
 	default:
 		d.State = "ok"
 	}
-	if a.driver.State == "installing" && d.State != "ok" {
-		d.State = "installing"
+	switch {
+	case a.driver.State == "installing" && d.State != "ok":
+		d.State, d.Progress = "installing", a.driver.Progress
+	case a.driverRestart && (d.State == "ok" || d.State == "outdated"):
+		// Installed, but Windows has not loaded it yet: until this agent
+		// restarts (it starts again at the next sign-in) it is not usable.
+		d.State = "restart_needed"
+		d.Error = &Problem{"restart_needed", restartNeededMessage}
 	}
 	a.driver = d
 }

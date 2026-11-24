@@ -8,21 +8,18 @@
 #                       and fakedrive-server.exe (dist/windows-amd64/dev/)
 #   make host-dev       the same two for this computer (dist/host-dev/), without the desktop app
 #   make vet test       go vet on the four targets; tests (two packages at a time)
+#   make winfsp-msi     fetch the pinned WinFsp installer into build/ (gh CLI); the
+#                       Windows builds embed it, so one .exe is all a person needs
 #   make notices        regenerate the open-source notices
 #   make clean
 
 GO      ?= go
 NPM     ?= npm
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-# WINFSP_SHA256 pins the WinFsp MSI shipped next to the program (optional).
-WINFSP_SHA256 ?=
 
 export CGO_ENABLED := 0
 
 LDFLAGS := -s -w -X main.version=$(VERSION)
-ifneq ($(WINFSP_SHA256),)
-LDFLAGS += -X main.winfspSHA256=$(WINFSP_SHA256)
-endif
 BUILD   := $(GO) build -trimpath
 
 FRONTEND      := ui/frontend
@@ -30,7 +27,7 @@ FRONTEND_DIST := $(FRONTEND)/dist/index.html
 FRONTEND_SRC  := $(shell find $(FRONTEND)/src -type f -not -name '*.test.*') $(FRONTEND)/index.html \
                  $(FRONTEND)/vite.config.ts $(FRONTEND)/package.json
 
-.PHONY: all windows windows-arm64 dev host-dev frontend notices vet test clean FORCE
+.PHONY: all windows windows-arm64 dev host-dev frontend winfsp-msi notices vet test clean FORCE
 
 all: windows
 
@@ -49,6 +46,23 @@ $(FRONTEND)/node_modules/.package-lock.json: $(FRONTEND)/package-lock.json
 $(FRONTEND_DIST): $(FRONTEND)/node_modules/.package-lock.json $(FRONTEND_SRC)
 	cd $(FRONTEND) && $(NPM) run build
 
+# The WinFsp installer, unmodified, from the WinFsp project's v2.2 release.
+# Its version, size and SHA-256 are pinned in internal/winfspmsi; the file is
+# checked here and again (with its Authenticode signature) before it runs.
+# It is never committed (build/ and the embed copy are gitignored).
+WINFSP_MSI   := build/winfsp-2.2.26323.msi
+WINFSP_EMBED := internal/winfspmsi/winfsp.msi
+
+winfsp-msi: $(WINFSP_EMBED)
+
+$(WINFSP_MSI):
+	mkdir -p build
+	gh release download v2.2 -R winfsp/winfsp -p winfsp-2.2.26323.msi -D build --clobber
+
+$(WINFSP_EMBED): $(WINFSP_MSI)
+	$(GO) run ./internal/winfspmsi/verify $(WINFSP_MSI)
+	cp $(WINFSP_MSI) $@
+
 # One exe: no arguments opens the desktop app; a command runs headless. It
 # is a GUI-subsystem program that attaches to the console it was started
 # from, so commands still print there.
@@ -59,13 +73,13 @@ ARCHS := amd64 arm64
 # so the version is current).
 WINRES := $(GO) run ./ui/winres -out cmd/olsyn-drive
 
-$(ARCHS:%=dist/windows-%/olsyn-drive.exe): dist/windows-%/olsyn-drive.exe: $(FRONTEND_DIST) FORCE
+$(ARCHS:%=dist/windows-%/olsyn-drive.exe): dist/windows-%/olsyn-drive.exe: $(FRONTEND_DIST) $(WINFSP_EMBED) FORCE
 	$(WINRES) -arch $* -version $(VERSION)
-	GOOS=windows GOARCH=$* $(BUILD) -tags desktopui -ldflags "$(LDFLAGS) -H=windowsgui" -o $@ ./cmd/olsyn-drive
+	GOOS=windows GOARCH=$* $(BUILD) -tags "desktopui winfspmsi" -ldflags "$(LDFLAGS) -H=windowsgui" -o $@ ./cmd/olsyn-drive
 
-$(ARCHS:%=dist/windows-%/dev/olsyn-drive.exe): dist/windows-%/dev/olsyn-drive.exe: $(FRONTEND_DIST) FORCE
+$(ARCHS:%=dist/windows-%/dev/olsyn-drive.exe): dist/windows-%/dev/olsyn-drive.exe: $(FRONTEND_DIST) $(WINFSP_EMBED) FORCE
 	$(WINRES) -arch $* -version $(VERSION)-dev
-	GOOS=windows GOARCH=$* $(BUILD) -tags "desktopui devbuild" -ldflags "$(LDFLAGS)-dev -H=windowsgui" -o $@ ./cmd/olsyn-drive
+	GOOS=windows GOARCH=$* $(BUILD) -tags "desktopui devbuild winfspmsi" -ldflags "$(LDFLAGS)-dev -H=windowsgui" -o $@ ./cmd/olsyn-drive
 
 $(ARCHS:%=dist/windows-%/dev/fakedrive-server.exe): dist/windows-%/dev/fakedrive-server.exe: FORCE
 	GOOS=windows GOARCH=$* $(BUILD) -tags devbuild -ldflags "$(LDFLAGS)" -o $@ ./cmd/fakedrive-server
@@ -94,6 +108,6 @@ notices:
 	$(GO) run ./internal/notices/gen
 
 clean:
-	rm -rf dist cmd/olsyn-drive/rsrc_windows_*.syso
+	rm -rf dist cmd/olsyn-drive/rsrc_windows_*.syso $(WINFSP_EMBED)
 
 FORCE:

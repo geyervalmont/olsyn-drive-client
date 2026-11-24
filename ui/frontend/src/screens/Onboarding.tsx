@@ -2,7 +2,7 @@
 // when missing) → drive letter → done, with the drive opened in Explorer.
 
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import type { SettingsResponse } from '../api/types'
+import type { DriverProgress, SettingsResponse } from '../api/types'
 import { formatCountdown, secondsUntil } from '../lib/format'
 import { useNow } from '../lib/useNow'
 import { errorText, useAction, useAgentContext, useAgentView } from '../state/context'
@@ -13,7 +13,8 @@ import { Button, InlineError } from '../ui/controls'
 
 export type OnboardingStep = 'welcome' | 'signin' | 'driver' | 'letter' | 'done'
 
-const needsDriver = (state: string | undefined) => state === 'missing' || state === 'outdated' || state === 'installing'
+export const needsDriver = (state: string | undefined) =>
+  state === 'missing' || state === 'outdated' || state === 'installing' || state === 'restart_needed'
 
 export function Onboarding({ onDone, startAt = 'welcome' }: { onDone: () => void; startAt?: OnboardingStep }) {
   const view = useAgentView()
@@ -58,7 +59,7 @@ export function Onboarding({ onDone, startAt = 'welcome' }: { onDone: () => void
         )}
         {step === 'welcome' && <Welcome onNext={() => setStep('signin')} />}
         {step === 'signin' && <SignInStep onBack={() => setStep('welcome')} />}
-        {step === 'driver' && <DriverStep onNext={() => (letterChosen ? setStep('done') : setStep('letter'))} />}
+        {step === 'driver' && <DriverStep onNext={() => (letterChosen ? setStep('done') : setStep('letter'))} onLater={onDone} />}
         {step === 'letter' && <LetterStep onNext={() => setStep('done')} />}
         {step === 'done' && <DoneStep onDone={onDone} />}
       </div>
@@ -261,7 +262,13 @@ function SignInOutcome({ state, message, onRetry, pending, onBack }: { state: st
   )
 }
 
-function DriverStep({ onNext }: { onNext: () => void }) {
+const DRIVER_STEPS: { key: DriverProgress; label: string }[] = [
+  { key: 'preparing', label: 'Checking the installer' },
+  { key: 'approval', label: 'Waiting for you to choose Yes in the Windows prompt' },
+  { key: 'installing', label: 'Adding WinFsp' },
+]
+
+function DriverStep({ onNext, onLater }: { onNext: () => void; onLater: () => void }) {
   const view = useAgentView()
   const { client } = useAgentContext()
   const driver = view.state?.driver
@@ -272,7 +279,32 @@ function DriverStep({ onNext }: { onNext: () => void }) {
     if (driver?.state === 'ok' || driver?.state === 'not_needed') onNext()
   }, [driver?.state, onNext])
 
+  if (driver?.state === 'restart_needed') {
+    return (
+      <section className="onb-step" aria-labelledby="onboarding-title">
+        <span className="onb-icon" aria-hidden="true">
+          <Icon name="check" size={26} />
+        </span>
+        <h1 id="onboarding-title" className="onb-title display">
+          Almost there.
+        </h1>
+        <p className="onb-lead">WinFsp is added. Windows needs you to sign out and back in (or restart the PC) before the drive can appear.</p>
+        <div className="onb-expect">
+          <Icon name="info" size={17} />
+          <p>Olsyn Drive starts again by itself when you sign back in, and asks for the drive letter then.</p>
+        </div>
+        <div className="onb-actions">
+          <Button variant="primary" size="l" onClick={onLater} data-autofocus>
+            OK
+          </Button>
+        </div>
+      </section>
+    )
+  }
+
   const declined = driver?.error?.code === 'declined'
+  const failed = driver?.error && !declined ? driver.error.message : null
+  const current = installing ? DRIVER_STEPS.findIndex((s) => s.key === (driver?.progress ?? 'preparing')) : -1
   return (
     <section className="onb-step" aria-labelledby="onboarding-title">
       <span className="onb-icon" aria-hidden="true">
@@ -281,23 +313,37 @@ function DriverStep({ onNext }: { onNext: () => void }) {
       <h1 id="onboarding-title" className="onb-title display">
         One Windows component to add.
       </h1>
-      <p className="onb-lead">Olsyn Drive uses WinFsp, a free and widely used Windows component, to show the drive as a letter in File Explorer.</p>
-      <div className="onb-expect">
-        <Icon name="info" size={17} />
-        <p>Windows will ask whether to allow changes to this PC. Choose Yes. This happens once.</p>
-      </div>
-      {installing && (
-        <p className="code-wait" role="status">
-          <Spinner size={14} /> Waiting for Windows. Look for the prompt, it may be behind this window.
-        </p>
+      <p className="onb-lead">Olsyn Drive uses WinFsp, a free and widely used Windows component, to show the drive as a letter in File Explorer. It comes with Olsyn Drive, so nothing is downloaded.</p>
+      {!installing && (
+        <div className="onb-expect">
+          <Icon name="info" size={17} />
+          <p>Windows will ask whether to allow changes to this PC. Choose Yes. This happens once.</p>
+        </div>
       )}
-      {declined && !installing && <InlineError message="Windows didn't add it because the prompt was declined. Try again, or ask IT to install WinFsp for you." />}
+      {installing && (
+        <div role="status">
+          <ol className="onb-progress" aria-label="Adding WinFsp">
+            {DRIVER_STEPS.map((s, i) => (
+              <li key={s.key} className={i < current ? 'is-done' : i === current ? 'is-current' : ''} aria-current={i === current ? 'step' : undefined}>
+                <span className="onb-progress-mark" aria-hidden="true">
+                  {i < current ? <Icon name="check" size={13} /> : i === current ? <Spinner size={13} /> : null}
+                </span>
+                {s.label}
+                {s.key === 'approval' && i === current && <span className="onb-fine"> The prompt may be behind this window.</span>}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+      {declined && !installing && <InlineError message="Windows didn't add it because the prompt was declined. Try again and choose Yes, or ask your IT team to install WinFsp for you." />}
+      {failed && !installing && <InlineError message={failed} />}
       {error && <InlineError message={error.message} />}
       <div className="onb-actions">
         <Button variant="primary" size="l" pending={installing} onClick={() => void run('install', () => client.installDriver())} data-autofocus>
-          {declined ? 'Try again' : 'Add WinFsp'}
+          {declined || failed ? 'Try again' : 'Add WinFsp'}
         </Button>
       </div>
+      {driver?.others?.includes('dokany') && <p className="onb-fine">Dokany is also on this PC. That's fine: the two work side by side.</p>}
     </section>
   )
 }

@@ -26,6 +26,7 @@ func DetectDriver() (DriverInfo, error) {
 	dir, err := winfspInstallDir()
 	if err != nil {
 		if errors.Is(err, registry.ErrNotExist) {
+			info.Others = otherProviders()
 			return info, nil
 		}
 		return info, err
@@ -39,9 +40,29 @@ func DetectDriver() (DriverInfo, error) {
 	if err != nil {
 		return info, fmt.Errorf("read winfsp version: %w", err)
 	}
+	if v == "" {
+		return info, errors.New("winfsp has no version")
+	}
 	info.Installed = true
 	info.Version = v
+	info.Others = otherProviders()
 	return info, nil
+}
+
+// otherProviders lists other file system providers registered with Windows'
+// network provider order. Dokany registers "Dokan..."; it coexists with
+// WinFsp, so it is only reported.
+func otherProviders() []string {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control\NetworkProvider\Order`, registry.QUERY_VALUE)
+	if err != nil {
+		return nil
+	}
+	defer k.Close()
+	order, _, err := k.GetStringValue("ProviderOrder")
+	if err != nil {
+		return nil
+	}
+	return OtherProvidersIn(order)
 }
 
 func winfspInstallDir() (string, error) {
@@ -120,11 +141,17 @@ const (
 // InstallDriver runs the WinFsp MSI elevated (one UAC prompt) and waits for it.
 // The installer is first copied into workDir, then the copy must match
 // wantSHA256 and carry a valid Authenticode signature before it is run, so a
-// file swapped after the check is never executed.
-func InstallDriver(ctx context.Context, installer, wantSHA256, workDir string) error {
+// file swapped after the check is never executed. progress (may be nil)
+// hears the DriverStep values as they begin. A declined prompt is
+// ErrDeclined; an install that needs Windows restarted is ErrRestartNeeded.
+func InstallDriver(ctx context.Context, installer, wantSHA256, workDir string, progress func(step string)) error {
 	if wantSHA256 == "" {
 		return errors.New("installer hash is required")
 	}
+	if progress == nil {
+		progress = func(string) {}
+	}
+	progress(DriverStepPreparing)
 	staged, err := stageVerified(installer, wantSHA256, workDir)
 	if err != nil {
 		return err
@@ -151,6 +178,7 @@ func InstallDriver(ctx context.Context, installer, wantSHA256, workDir string) e
 		nShow:        windows.SW_SHOWNORMAL,
 	}
 	sei.cbSize = uint32(unsafe.Sizeof(sei))
+	progress(DriverStepApproval)
 	proc := windows.NewLazySystemDLL("shell32.dll").NewProc("ShellExecuteExW")
 	if r, _, e := proc.Call(uintptr(unsafe.Pointer(&sei))); r == 0 {
 		if errors.Is(e, windows.ERROR_CANCELLED) {
@@ -162,6 +190,8 @@ func InstallDriver(ctx context.Context, installer, wantSHA256, workDir string) e
 		return errors.New("driver installer started without a process handle")
 	}
 	defer windows.CloseHandle(sei.hProcess)
+	// ShellExecuteEx returns once the prompt was accepted and msiexec runs.
+	progress(DriverStepInstalling)
 	for {
 		ev, err := windows.WaitForSingleObject(sei.hProcess, 500)
 		if err != nil {
@@ -179,8 +209,10 @@ func InstallDriver(ctx context.Context, installer, wantSHA256, workDir string) e
 		return fmt.Errorf("driver installer exit code: %w", err)
 	}
 	switch code {
-	case 0, msiRebootRequired:
+	case 0:
 		return nil
+	case msiRebootRequired:
+		return ErrRestartNeeded
 	case msiUserExit:
 		return ErrDeclined
 	default:

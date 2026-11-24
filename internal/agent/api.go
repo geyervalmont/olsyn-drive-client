@@ -208,6 +208,12 @@ type Driver struct {
 	Version    string   `json:"version"`
 	MinVersion string   `json:"min_version"`
 	Error      *Problem `json:"error"`
+	// Progress is the install step while State is "installing":
+	// preparing, approval (the administrator prompt is up) or installing.
+	Progress string `json:"progress,omitempty"`
+	// Others names other file system providers found (e.g. "dokany");
+	// they coexist and are only reported.
+	Others []string `json:"others,omitempty"`
 }
 
 // State is GET /v1/state and the state event.

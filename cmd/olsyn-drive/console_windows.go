@@ -56,3 +56,37 @@ func showError(title, text string) {
 	}
 	_, _ = windows.MessageBox(0, m, t, windows.MB_OK|windows.MB_ICONERROR)
 }
+
+// showInfo puts up an information message box.
+func showInfo(title, text string) {
+	messageBox(title, text, windows.MB_OK|windows.MB_ICONINFORMATION)
+}
+
+// askOKCancel asks in a message box; true for OK.
+func askOKCancel(title, text string) bool {
+	return messageBox(title, text, windows.MB_OKCANCEL|windows.MB_ICONQUESTION) == idOK
+}
+
+// askYesNo asks a yes/no question; def is the button Enter presses.
+func askYesNo(title, text string, def bool) bool {
+	flags := uint32(windows.MB_YESNO | windows.MB_ICONQUESTION)
+	if !def {
+		flags |= windows.MB_DEFBUTTON2
+	}
+	return messageBox(title, text, flags) == idYes
+}
+
+const (
+	idOK  = 1
+	idYes = 6
+)
+
+func messageBox(title, text string, flags uint32) int32 {
+	t, err1 := windows.UTF16PtrFromString(title)
+	m, err2 := windows.UTF16PtrFromString(text)
+	if err1 != nil || err2 != nil {
+		return 0
+	}
+	r, _ := windows.MessageBox(0, m, t, flags|windows.MB_SETFOREGROUND)
+	return r
+}

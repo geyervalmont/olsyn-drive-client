@@ -225,10 +225,19 @@ when unknown. `files_left` = active + waiting.
 ### Driver
 
 ```json
-{"state": "ok", "name": "winfsp", "version": "2.2.25089", "min_version": "2.0", "error": null}
+{"state": "installing", "name": "winfsp", "version": null, "min_version": "2.0", "error": null,
+ "progress": "approval", "others": ["dokany"]}
 ```
 
-`state`: `ok` | `missing` | `outdated` | `installing` | `not_needed` (this OS needs no driver yet) | `unknown`.
+`state`: `ok` | `missing` | `outdated` | `installing` | `restart_needed` (installed, but Windows must sign
+out and in, or restart, before it loads; the mount waits, 409 `driver_restart_needed`) | `not_needed` (this OS needs
+no driver yet) | `unknown`. `min_version` is this build's minimum (WinFsp 2.0) or a release manifest's, whichever is
+newer; an installed WinFsp at least that new is used as it is and never reinstalled.
+`progress` (only while `installing`): `preparing` (extracting and checking the installer) → `approval` (the
+Windows administrator prompt is up) → `installing`. `others`: other file system providers found in Windows'
+network provider order (`dokany`); they coexist with WinFsp and are only reported.
+`error.code` after an install: `declined` (the prompt was refused; state stays `missing`), `install_failed`,
+`restart_needed`.
 
 ### Settings
 
@@ -382,9 +391,12 @@ the new version starts and must answer `GET /v1/state` with the new `version`, `
 mounted, `mount.state: mounted` within 60 s; otherwise the old version is put back and started, and its
 `update.state` is `failed` with code `rolled_back`. The UI simply reconnects (a new `agent_run`).
 
-`POST /v1/driver/install` → 202 `Driver` (state `installing`). Runs the bundled, hash-checked and
-signature-checked WinFsp installer with one UAC prompt; the outcome comes as a `state` event (`driver.state`
-`ok`, or `missing` with `error` `declined` when the person said no). 409 `not_supported` off Windows.
+`POST /v1/driver/install` → 202 `Driver` (state `installing`, `progress` `preparing`). Extracts the WinFsp MSI
+embedded in the program to a new temporary folder, checks its SHA-256 against the pinned value and its Authenticode
+signature, and runs `msiexec` through ShellExecute `runas` (one UAC prompt). Progress and the outcome come as
+`state` events: `driver.state` `ok`; `missing` with `error` `declined` when the person said no;
+`restart_needed` when the installer asks for a restart (MSI 3010). 409 `not_supported` off Windows,
+`driver_restart_needed` while a restart is pending.
 
 ### Other
 

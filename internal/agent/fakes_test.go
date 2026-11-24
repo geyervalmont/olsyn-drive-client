@@ -150,7 +150,7 @@ func (f *fakeFS) Retry(ctx context.Context, id string) (Transfer, error) {
 func (f *fakeFS) Cancel(ctx context.Context, id string) (Transfer, error) {
 	return Transfer{}, ErrNotFound
 }
-func (f *fakeFS) DiscardHeld(ctx context.Context, id string) error { return ErrNotHeld }
+func (f *fakeFS) DiscardHeld(ctx context.Context, id string) error  { return ErrNotHeld }
 func (f *fakeFS) ReuploadHeld(ctx context.Context, id string) error { return ErrNotHeld }
 func (f *fakeFS) SaveHeldCopy(ctx context.Context, id, dest string) (string, error) {
 	return "", ErrNotHeld
@@ -266,6 +266,8 @@ type fakeSystem struct {
 	routes    []string
 	// lettersInUse overrides the default (only D: taken)
 	lettersInUse map[string]string
+	// install runs for InstallDriver; nil declines the prompt.
+	install func(progress func(string)) error
 }
 
 func (s *fakeSystem) OpenURL(ctx context.Context, u string) error {
@@ -295,7 +297,15 @@ func (s *fakeSystem) DetectDriver() (platform.DriverInfo, error) {
 	return s.driver, nil
 }
 
-func (s *fakeSystem) InstallDriver(ctx context.Context) error { return platform.ErrDeclined }
+func (s *fakeSystem) InstallDriver(ctx context.Context, progress func(string)) error {
+	s.mu.Lock()
+	install := s.install
+	s.mu.Unlock()
+	if install == nil {
+		return platform.ErrDeclined
+	}
+	return install(progress)
+}
 func (s *fakeSystem) DriveLettersInUse() (map[string]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Onboarding, type OnboardingStep } from './screens/Onboarding'
+import { Onboarding, needsDriver, type OnboardingStep } from './screens/Onboarding'
 import { MainWindow } from './screens/main/MainWindow'
 import { Popover } from './screens/popover/Popover'
 import { useAgentContext, useAgentView } from './state/context'
@@ -19,6 +19,9 @@ export function App({ surface }: { surface: Surface }) {
     if (typeof history !== 'undefined') history.replaceState(null, '', '#' + next)
   }, [])
   const [onboarding, setOnboarding] = useState<OnboardingStep | null>(null)
+  // Set when the person closes a setup that is not finished (driver waits
+  // for a restart of Windows), so it is not put straight back.
+  const [setupDeferred, setSetupDeferred] = useState(false)
   const state = view.state
 
   useEffect(() => shell.onRoute(navigate), [shell, navigate])
@@ -26,8 +29,12 @@ export function App({ surface }: { surface: Surface }) {
   // First run, or signed out: the setup flow takes the main window.
   useEffect(() => {
     if (surface !== 'main' || !state) return
-    if (!state.account && onboarding === null) setOnboarding(state.signin?.state === 'waiting' ? 'signin' : 'welcome')
-  }, [surface, state, onboarding])
+    if (onboarding !== null) return
+    if (!state.account) setOnboarding(state.signin?.state === 'waiting' ? 'signin' : 'welcome')
+    // Signed in, but the drive letter was never chosen (the app was closed
+    // during setup, or Windows was restarted for the driver): finish setup.
+    else if (state.mount.letter_confirmed === false && !setupDeferred) setOnboarding(needsDriver(state.driver.state) ? 'driver' : 'letter')
+  }, [surface, state, onboarding, setupDeferred])
 
   useEffect(() => {
     if (route !== 'signin') return
@@ -47,7 +54,14 @@ export function App({ surface }: { surface: Surface }) {
   if (!state) return <Starting />
   return (
     <>
-      {onboarding ? <Onboarding key={onboarding} startAt={onboarding} onDone={() => setOnboarding(null)} /> : <MainWindow route={route} navigate={navigate} />}
+      {onboarding ? <Onboarding
+          key={onboarding}
+          startAt={onboarding}
+          onDone={() => {
+            setSetupDeferred(true)
+            setOnboarding(null)
+          }}
+        /> : <MainWindow route={route} navigate={navigate} />}
       <BrowserNotifications navigate={navigate} />
     </>
   )

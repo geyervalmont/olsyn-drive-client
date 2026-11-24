@@ -100,11 +100,11 @@ func (a *Agent) applyReleaseLocked(rel *update.Release) {
 	m := rel.Manifest
 	a.update.Required = rel.Required
 	a.update.DriverRequired = nil
-	a.driver.MinVersion = ""
-	if m.Driver != nil {
+	a.driver.MinVersion = a.opts.DriverMinVersion
+	if m.Driver != nil && driverAtLeast(m.Driver.MinVersion, a.driver.MinVersion) {
 		a.driver.MinVersion = m.Driver.MinVersion
-		a.refreshDriverLocked()
 	}
+	a.refreshDriverLocked()
 	if !rel.Newer {
 		a.update.State, a.update.Available, a.update.Notes, a.update.PublishedAt = "up_to_date", nil, nil, nil
 		a.upd.rel, a.upd.staged = nil, ""

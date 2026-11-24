@@ -12,6 +12,8 @@ export const scenarios = {
   conflict: 'A file changed on the drive while this PC was saving it: a conflict copy was made.',
   update: 'An update is available; install it and watch it apply.',
   'driver-missing': 'Signed in, but the file system driver is missing.',
+  'driver-restart': 'A new PC where adding WinFsp needs Windows to sign out and back in before the drive can appear.',
+  'driver-declined': 'A new PC where the Windows prompt is declined the first time, then accepted.',
   'signed-out': 'Signed out by the drive (this PC was removed in the web app).',
   'big-list': '12,000 files waiting while paused, to check the list stays smooth.',
   empty: 'Connected with nothing moving and no history.',

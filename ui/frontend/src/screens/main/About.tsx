@@ -135,6 +135,8 @@ function driverText(state: string, version: string | null) {
       return 'WinFsp ' + (version ?? '') + ', needs an update'
     case 'installing':
       return 'Installing'
+    case 'restart_needed':
+      return 'WinFsp ' + (version ?? '') + ', waiting for Windows to sign out and in'
     case 'not_needed':
       return 'Not needed on this system'
     default:

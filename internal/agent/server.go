@@ -492,8 +492,13 @@ func (a *Agent) hDriverInstall(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, newAPIError(409, "not_supported", "This computer needs no driver."))
 		return
 	}
+	if a.driver.State == "restart_needed" {
+		a.mu.Unlock()
+		a.fail(w, newAPIError(409, "driver_restart_needed", restartNeededMessage))
+		return
+	}
 	if a.driver.State != "installing" {
-		a.driver.State, a.driver.Error = "installing", nil
+		a.driver.State, a.driver.Error, a.driver.Progress = "installing", nil, platform.DriverStepPreparing
 		runCtx := a.ctx
 		go a.installDriver(runCtx)
 	}
@@ -504,20 +509,33 @@ func (a *Agent) hDriverInstall(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Agent) installDriver(ctx context.Context) {
-	err := a.opts.System.InstallDriver(ctx)
-	a.mu.Lock()
-	a.driver.State = ""
-	a.refreshDriverLocked()
-	if err != nil {
-		code, msg := "install_failed", "The driver could not be installed: "+err.Error()
-		if errors.Is(err, platform.ErrDeclined) {
-			code, msg = "declined", "The administrator prompt was declined."
+	err := a.opts.System.InstallDriver(ctx, func(step string) {
+		a.mu.Lock()
+		if a.driver.State == "installing" {
+			a.driver.Progress = step
 		}
-		a.driver.Error = &Problem{code, msg}
+		a.mu.Unlock()
+		a.emitState()
+	})
+	a.mu.Lock()
+	a.driver.State, a.driver.Progress = "", ""
+	if errors.Is(err, platform.ErrRestartNeeded) {
+		a.driverRestart = true
+	}
+	a.refreshDriverLocked()
+	switch {
+	case err == nil, errors.Is(err, platform.ErrRestartNeeded):
+	case errors.Is(err, platform.ErrDeclined):
+		a.driver.Error = &Problem{"declined", "The administrator prompt was declined."}
+	default:
+		a.driver.Error = &Problem{"install_failed", "The driver could not be installed: " + err.Error()}
 	}
 	wantMount := a.mountWanted && a.letterConfirmed && a.driver.State == "ok" && a.mount.State != MountMounted && a.phase == phaseRunning
 	a.mu.Unlock()
-	if err != nil {
+	switch {
+	case errors.Is(err, platform.ErrRestartNeeded):
+		a.log.Info("driver installed; Windows needs a restart before it can be used")
+	case err != nil:
 		a.log.Warn("driver install failed", "err", err)
 	}
 	a.emitState()

@@ -30,6 +30,9 @@ var (
 	ErrAlreadyRunning = errors.New("another olsyn-drive agent is already running for this user")
 	// ErrDeclined means the person declined an elevation prompt.
 	ErrDeclined = errors.New("the person declined the administrator prompt")
+	// ErrRestartNeeded means the driver installed but Windows must restart
+	// (or the person sign out and in) before it can be used.
+	ErrRestartNeeded = errors.New("the driver is installed but needs a restart of Windows")
 )
 
 // Paths are the per-user folders the client uses.
@@ -100,7 +103,17 @@ type DriverInfo struct {
 	Installed  bool
 	Version    string // dotted file version, e.g. "2.2.25089"
 	InstallDir string
+	// Others names other user-mode file system providers found on this
+	// computer ("dokany"). They coexist with WinFsp; this is reported only.
+	Others []string
 }
+
+// Steps InstallDriver reports through its progress callback, in order.
+const (
+	DriverStepPreparing  = "preparing"  // extracting and checking the installer
+	DriverStepApproval   = "approval"   // the administrator prompt is up
+	DriverStepInstalling = "installing" // the installer is running
+)
 
 // UninstallEntry is what the OS's "installed apps" list shows.
 type UninstallEntry struct {

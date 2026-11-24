@@ -18,6 +18,7 @@ import (
 	"github.com/geyervalmont/olsyn-drive-client/internal/notices"
 	"github.com/geyervalmont/olsyn-drive-client/internal/platform"
 	"github.com/geyervalmont/olsyn-drive-client/internal/update"
+	"github.com/geyervalmont/olsyn-drive-client/internal/winfspmsi"
 )
 
 // cmdAgent runs the per-user agent until signalled, quit over IPC, or
@@ -117,16 +118,17 @@ func cmdAgent(e *env, args []string) int {
 		return exitError
 	}
 	opts := agent.Options{
-		Version:  version,
-		Paths:    e.paths,
-		Listener: l,
-		Server:   server,
-		DriveFor: newDriveFor(hc, log),
-		FS:       coreFS,
-		Mounter:  newMounter(coreFS, log),
-		Creds:    creds,
-		System:   osSystem{exe: exe, paths: e.paths},
-		Logger:   log,
+		DriverMinVersion: winfspmsi.MinVersion,
+		Version:          version,
+		Paths:            e.paths,
+		Listener:         l,
+		Server:           server,
+		DriveFor:         newDriveFor(hc, log),
+		FS:               coreFS,
+		Mounter:          newMounter(coreFS, log),
+		Creds:            creds,
+		System:           osSystem{exe: exe, paths: e.paths},
+		Logger:           log,
 		OnReady: func() {
 			cleanupAfterUpdate(e.ctx, log, exe)
 		},

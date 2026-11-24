@@ -21,8 +21,11 @@ describe('first-run onboarding', () => {
     expect(screen.getByText(/Windows will ask whether to allow changes/)).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Add WinFsp' }))
-    expect(await screen.findByText(/Waiting for Windows/)).toBeTruthy()
-    await act(async () => agent.tick(4))
+    const progress = await screen.findByRole('list', { name: 'Adding WinFsp' })
+    expect(within(progress).getByText('Checking the installer')).toBeTruthy()
+    await act(async () => agent.tick(1))
+    await waitFor(() => expect(progress.querySelector('[aria-current="step"]')?.textContent).toMatch(/choose Yes in the Windows prompt/))
+    await act(async () => agent.tick(3))
 
     expect(await screen.findByRole('heading', { name: 'Choose a letter for the drive.' })).toBeTruthy()
     const group = await screen.findByRole('radiogroup', { name: 'Drive letter' })
@@ -44,6 +47,34 @@ describe('first-run onboarding', () => {
     })
     // Onboarding is over: the main window shows.
     await waitFor(() => expect(screen.getByRole('navigation', { name: 'Olsyn Drive' })).toBeTruthy())
+  })
+
+  it('says to sign out of Windows when the driver needs it, and finishes setup afterwards', async () => {
+    const { agent } = renderWithAgent(<App surface="main" />, 'driver-restart')
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))
+    await screen.findByText('Your code')
+    await act(async () => agent.tick(8))
+    fireEvent.click(await screen.findByRole('button', { name: 'Add WinFsp' }))
+    await act(async () => agent.tick(5))
+    expect(await screen.findByRole('heading', { name: 'Almost there.' })).toBeTruthy()
+    expect(screen.getByText(/sign out and back in/)).toBeTruthy()
+    expect(agent.state().mount.state).toBe('unmounted')
+    fireEvent.click(screen.getByRole('button', { name: 'OK' }))
+    // Closed for now: the main window shows, and says what is left to do.
+    await waitFor(() => expect(screen.getByRole('navigation', { name: 'Olsyn Drive' })).toBeTruthy())
+  })
+
+  it('offers to try again when the Windows prompt is declined', async () => {
+    const { agent } = renderWithAgent(<App surface="main" />, 'driver-declined')
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))
+    await screen.findByText('Your code')
+    await act(async () => agent.tick(8))
+    fireEvent.click(await screen.findByRole('button', { name: 'Add WinFsp' }))
+    await act(async () => agent.tick(3))
+    expect(await screen.findByText(/the prompt was declined/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await act(async () => agent.tick(5))
+    expect(await screen.findByRole('heading', { name: 'Choose a letter for the drive.' })).toBeTruthy()
   })
 
   it('does not connect before the letter is chosen, and picks the next free one when W: is taken', async () => {

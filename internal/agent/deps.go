@@ -201,7 +201,8 @@ type System interface {
 	SetAutostart(enabled bool) error
 	DetectDriver() (platform.DriverInfo, error)
 	// InstallDriver runs the bundled, verified driver installer elevated.
-	InstallDriver(ctx context.Context) error
+	// progress hears the platform.DriverStep values as they begin.
+	InstallDriver(ctx context.Context, progress func(step string)) error
 	// DriveLettersInUse maps the letters D: to Z: something holds to what
 	// (platform.LetterVolume, LetterNetwork, LetterSubst); nil where the OS
 	// has no drive letters.

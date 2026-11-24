@@ -26,8 +26,6 @@ import (
 // Set at build time with -ldflags -X. They are the only package-level values.
 var (
 	version = "dev"
-	// winfspSHA256 pins the WinFsp MSI shipped next to the executable.
-	winfspSHA256 = ""
 )
 
 // Exit codes.
@@ -70,7 +68,9 @@ Usage: olsyn-drive <command> [options]
   version               print the version
   licences              print the open-source notices
   install --user        install for this user (no administrator needed)
-  uninstall [--purge]   remove this program (and with --purge, its data)
+  uninstall [--keep-cache] [--yes]
+                        remove this program and its data (--keep-cache keeps
+                        settings, cache and files not yet sent)
 
 Environment: OLSYN_DRIVE_HOME puts every file under one folder (portable or test runs).
 `
@@ -121,6 +121,13 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		fmt.Fprintf(stderr, "olsyn-drive: %v\n", err)
 		return exitError
 	}
+	if len(args) == 0 {
+		// A double-click: from Downloads this offers to install (or update
+		// the installed copy) and hands over to it.
+		if code, done := offerInstall(e); done {
+			return code
+		}
+	}
 	if isUILaunch(args) {
 		if len(args) > 0 && args[0] == "ui" {
 			args = args[1:]
@@ -146,7 +153,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	case "diagnose":
 		return cmdDiagnose(e, rest)
 	case "quit":
-		stopAgent(e)
+		if err := stopAgent(e); err != nil {
+			return e.report(err)
+		}
 		e.printf("The agent is stopped (saves not yet on the drive stay queued for its next start).\n")
 		return exitOK
 	case "version", "--version", "-v":

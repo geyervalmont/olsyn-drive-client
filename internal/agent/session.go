@@ -554,6 +554,8 @@ func (a *Agent) canMount() error {
 		return newAPIError(409, "driver_missing", "Install the WinFsp driver first.")
 	case "outdated":
 		return newAPIError(409, "driver_outdated", "A newer WinFsp driver is needed.")
+	case "restart_needed":
+		return newAPIError(409, "driver_restart_needed", restartNeededMessage)
 	}
 	if a.update.Required {
 		return newAPIError(409, "update_required", "Update Olsyn Drive to connect the drive.")
