@@ -48,9 +48,11 @@ type FS struct {
 	deleting map[string]int
 	inflight map[uint64]*running
 	listing  map[string]*listCall
-	state    State
-	subs     map[int]chan Event
-	nextSub  int
+	// genListed: when each generated folder was last listed (this run).
+	genListed map[string]time.Time
+	state     State
+	subs      map[int]chan Event
+	nextSub   int
 
 	// displaced: drive files just renamed to a temp name, by folder and old
 	// name (see takeDisplaced); guarded by mu.
@@ -140,10 +142,13 @@ func New(cfg Config) (*FS, error) {
 	}
 	fs := &FS{release: cfg.Release.WithDefaults(), cfg: cfg, api: cfg.API, eng: cfg.Engine, idx: cfg.Index, cache: cfg.Cache, jr: cfg.Journal, log: cfg.Logger,
 		open: map[string]*openNode{}, pending: map[string]int{}, deleting: map[string]int{}, touched: map[string]touchedAt{}, inflight: map[uint64]*running{}, displaced: map[string]displacedFile{},
-		uploading: map[string]string{}, listing: map[string]*listCall{}, state: StateOnline,
+		uploading: map[string]string{}, listing: map[string]*listCall{}, genListed: map[string]time.Time{}, state: StateOnline,
 		subs: map[int]chan Event{}, kick: make(chan struct{}, 1), wake: make(chan struct{}, 1),
 		feed: newFeedPacer(cfg.ChangesMinInterval, cfg.ChangesMaxInterval, cfg.ChangesPerMinute)}
 	if err := fs.recover(); err != nil {
+		return nil, err
+	}
+	if err := fs.migrateIndex(); err != nil {
 		return nil, err
 	}
 	return fs, nil
@@ -475,11 +480,31 @@ func (fs *FS) walk(ctx context.Context, parts []string, path string) (*index.Ent
 // them once with a bounded wait. The fetch carries on in the background
 // when the wait runs out (KindTimeout: try again shortly).
 func (fs *FS) ensureListed(ctx context.Context, dir *index.Entry) error {
-	if dir.ServerID == "" || dir.LocalOnly || fs.idx.Listed(dir.ID) {
+	if dir.ServerID == "" || dir.LocalOnly {
+		return nil
+	}
+	listed := fs.idx.Listed(dir.ID)
+	stale := false
+	if listed && dir.Generated {
+		// the changes feed says nothing about generated files: a generated
+		// folder's listing is fetched again once it is a little old
+		fs.mu.Lock()
+		at, ok := fs.genListed[dir.ID]
+		fs.mu.Unlock()
+		stale = !ok || time.Since(at) > generatedRefresh
+	}
+	if listed && (!stale || fs.offline()) {
 		return nil
 	}
 	if fs.offline() {
 		return newErr(KindOffline, "list", dir.Name, nil)
+	}
+	if dir.Generated {
+		defer func() {
+			fs.mu.Lock()
+			fs.genListed[dir.ID] = time.Now()
+			fs.mu.Unlock()
+		}()
 	}
 	call := fs.startListing(dir)
 	t := time.NewTimer(fs.cfg.ListTimeout)
@@ -492,6 +517,30 @@ func (fs *FS) ensureListed(ctx context.Context, dir *index.Entry) error {
 	case <-ctx.Done():
 		return classify("list", dir.Name, ctx.Err())
 	}
+}
+
+// generatedRefresh is how old a generated folder's listing may be before it
+// is fetched again when the folder is used.
+const generatedRefresh = 30 * time.Second
+
+// indexFormat is bumped when entries gain something only a fresh listing
+// can fill in; folders are then listed again as they are used.
+// 2: generated files and folders.
+const (
+	metaIndexFormat = "index_format"
+	indexFormat     = "2"
+)
+
+func (fs *FS) migrateIndex() error {
+	if fs.idx.Meta(metaIndexFormat) == indexFormat {
+		return nil
+	}
+	return fs.idx.Update(func(tx *index.Tx) error {
+		if err := tx.ForgetListings(); err != nil {
+			return err
+		}
+		return tx.SetMeta(metaIndexFormat, indexFormat)
+	})
 }
 
 func (fs *FS) startListing(dir *index.Entry) *listCall {
@@ -677,6 +726,7 @@ func (fs *FS) mergeNode(tx *index.Tx, n *driveapi.Node, parent string) error {
 	}
 	e.CanWrite, e.CanUpload, e.CanDelete = n.Can.Write, n.Can.Upload, n.Can.Delete
 	e.Sealed, e.Managed = n.Sealed, n.IsManaged()
+	_, e.Generated = n.GeneratedInfo()
 	if e.IsDir() {
 		e.Size = 0
 	}

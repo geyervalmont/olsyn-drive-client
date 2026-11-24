@@ -53,6 +53,9 @@ type Entry struct {
 	CanDelete bool `json:"d,omitempty"`
 	Sealed    bool `json:"sealed,omitempty"`
 	Managed   bool `json:"managed,omitempty"`
+	// Generated marks a file or folder the drive computes (previews,
+	// converted textures): read-only, and absent from the changes feed.
+	Generated bool `json:"gen,omitempty"`
 	// Attributes kept for the OS only (hidden, read-only, …), never sent.
 	Attrs uint32 `json:"attrs,omitempty"`
 	// LocalOnly marks junk the OS made (Thumbs.db, ~$ lock files, …): it

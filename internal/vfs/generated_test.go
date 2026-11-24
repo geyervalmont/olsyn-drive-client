@@ -2,9 +2,11 @@ package vfs_test
 
 import (
 	"bytes"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/geyervalmont/olsyn-drive-client/internal/index"
 	"github.com/geyervalmont/olsyn-drive-client/internal/vfs"
 )
 
@@ -45,6 +47,35 @@ func TestGeneratedFilesRead(t *testing.T) {
 	_ = h.Close()
 	if got, err := e.readFile("/Oak/revit-2048/bump.png"); err != nil || !bytes.Equal(got, later) {
 		t.Fatalf("generated file built on open: %d bytes, err %v", len(got), err)
+	}
+
+	// an index written by a build that knew nothing of generated files (it
+	// kept them with no content identity) is listed again after an update
+	e.stop()
+	if err := func() error {
+		idx, err := index.Open(filepath.Join(e.dir, "index.db"))
+		if err != nil {
+			return err
+		}
+		defer idx.Close()
+		return idx.Update(func(tx *index.Tx) error {
+			if err := tx.All(func(en *index.Entry) error {
+				if en.Generated {
+					en.Generated, en.VersionID = false, ""
+					return tx.Put(en)
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			return tx.SetMeta("index_format", "")
+		})
+	}(); err != nil {
+		t.Fatal(err)
+	}
+	e.start()
+	if got, err := e.readFile("/Oak/revit-2048/base_color.jpg"); err != nil || !bytes.Equal(got, built) {
+		t.Fatalf("after an update from an older index: %d bytes, err %v", len(got), err)
 	}
 
 	// generated files are read-only
