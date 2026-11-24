@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/geyervalmont/olsyn-drive-client/internal/agent"
+	"github.com/geyervalmont/olsyn-drive-client/internal/links"
 	"github.com/geyervalmont/olsyn-drive-client/internal/platform"
 )
 
@@ -547,19 +548,20 @@ func cmdDiagnose(e *env, args []string) int {
 	return exitOK
 }
 
-// cmdOpenURL handles olsyn-drive:// links registered with the OS:
-// olsyn-drive://open?path=/Projects/Tower opens that folder on the drive.
+// cmdOpenURL handles olsyn-drive:// links registered with the OS
+// (internal/links): a screen opens the desktop app there (a running app takes
+// the link), a drive or web link is handed to the agent.
 func cmdOpenURL(e *env, args []string) int {
 	if len(args) != 1 {
 		return exitUsage
-	}
-	if u, err := url.Parse(args[0]); err == nil && u.Scheme == "olsyn-drive" && u.Host == "show" && hasUI {
-		return runUI(e, args) // a screen of the desktop app; a running app takes the link
 	}
 	action, err := parseOpenURL(args[0])
 	if err != nil {
 		e.errorf("olsyn-drive: %v\n", err)
 		return exitUsage
+	}
+	if action.Target == "ui" && hasUI {
+		return runUI(e, []string{links.ScreenLink(action.Path)})
 	}
 	c, err := ensureAgent(e)
 	if err != nil {
@@ -571,21 +573,68 @@ func cmdOpenURL(e *env, args []string) int {
 	return exitOK
 }
 
+// parseOpenURL turns an olsyn-drive:// link into the agent's POST /v1/open body.
 func parseOpenURL(raw string) (agent.OpenAction, error) {
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "olsyn-drive" {
-		return agent.OpenAction{}, fmt.Errorf("not an olsyn-drive link")
+	a, err := links.Parse(raw)
+	if err != nil {
+		return agent.OpenAction{}, err
 	}
-	target := u.Host
-	if target == "" {
-		target = strings.TrimPrefix(u.Opaque, "//")
+	switch a.Kind {
+	case links.KindDrive:
+		return agent.OpenAction{Target: "drive", Path: a.Path}, nil
+	case links.KindWeb:
+		return agent.OpenAction{Target: "web", Path: a.Path}, nil
 	}
-	p := u.Query().Get("path")
-	switch target {
-	case "open", "drive":
-		return agent.OpenAction{Target: "drive", Path: p}, nil
-	case "web":
-		return agent.OpenAction{Target: "web", Path: p}, nil
+	return agent.OpenAction{Target: "ui", Path: a.Screen}, nil
+}
+
+// cmdOpen brings the desktop app to the front on a screen, through the
+// agent's POST /v1/open (the same way notifications and links go):
+//
+//	olsyn-drive open transfers [active|waiting|held|done|skipped]   (or transfers/held, or --filter held)
+//	olsyn-drive open activity | settings | account | about | popover
+func cmdOpen(e *env, args []string) int {
+	var names []string
+	filter := ""
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--filter" || a == "-filter":
+			if i+1 >= len(args) {
+				e.errorf("olsyn-drive: --filter needs a value\n")
+				return exitUsage
+			}
+			i++
+			filter = args[i]
+		case strings.HasPrefix(a, "--filter=") || strings.HasPrefix(a, "-filter="):
+			_, filter, _ = strings.Cut(a, "=")
+		case strings.HasPrefix(a, "-"):
+			e.errorf("olsyn-drive: open: unknown option %s\n", a)
+			return exitUsage
+		default:
+			names = append(names, a)
+		}
 	}
-	return agent.OpenAction{}, fmt.Errorf("unknown olsyn-drive link %q", target)
+	if len(names) == 0 || len(names) > 2 {
+		e.errorf("usage: olsyn-drive open <screen>\n  screens: transfers [active|waiting|held|done|skipped], activity, settings, account, about, popover\n")
+		return exitUsage
+	}
+	name := strings.Join(names, "/")
+	if filter != "" {
+		name += "/" + filter
+	}
+	screen, err := links.Screen(name)
+	if err != nil {
+		e.errorf("olsyn-drive: %v\n", err)
+		return exitUsage
+	}
+	c, err := ensureAgent(e)
+	if err != nil {
+		return e.report(err)
+	}
+	if err := c.Do(e.ctx, http.MethodPost, "/v1/open", agent.OpenAction{Target: "ui", Path: screen}, nil); err != nil {
+		return e.report(err)
+	}
+	e.printf("Showing %s.\n", screen)
+	return exitOK
 }

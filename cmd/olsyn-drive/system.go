@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/geyervalmont/olsyn-drive-client/internal/agent"
+	"github.com/geyervalmont/olsyn-drive-client/internal/links"
 	"github.com/geyervalmont/olsyn-drive-client/internal/platform"
 	"github.com/geyervalmont/olsyn-drive-client/internal/winfspmsi"
 )
@@ -50,13 +51,13 @@ func (s osSystem) InstallDriver(ctx context.Context, progress func(string)) erro
 	return platform.InstallDriver(ctx, path, winfspmsi.SHA256, dir, progress)
 }
 
-// ShowUI starts the desktop app with an olsyn-drive://show/<route> link; a
-// running app (single instance) takes the link and shows that route.
-func (s osSystem) ShowUI(ctx context.Context, route string) error {
+// ShowUI starts the desktop app with an olsyn-drive://open/<screen> link; a
+// running app (single instance) takes the link and shows that screen.
+func (s osSystem) ShowUI(ctx context.Context, screen string) error {
 	if !hasUI {
 		return agent.ErrNoUI
 	}
-	_, err := platform.StartDetached(s.exe, []string{"olsyn-drive://show/" + route})
+	_, err := platform.StartDetached(s.exe, []string{links.ScreenLink(screen)})
 	return err
 }
 

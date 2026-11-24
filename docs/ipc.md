@@ -437,10 +437,13 @@ file or folder name are redacted (names become `<name:3f9a1c2b>`, a hash that ma
 `POST /v1/open` body `{"target": "drive" | "web" | "folder" | "logs" | "ui", "path": "/Projects/Tower"}` → 204.
 `drive`: the path on the mounted drive in the file manager (409 `not_mounted`). `web`: the same item in the drive's
 web app (path optional). `folder`: a local folder (`path` absolute; 404 `local_not_found`). `logs`: the logs folder.
-`ui`: the desktop window at a route (`path` such as `transfers/held`, `activity`, `settings`, `about`; default
-`transfers/active`; 422 `invalid` for anything else). The agent starts the app with an
-`olsyn-drive://show/<route>` link; a running app takes the link and shows the route. Notification actions use this
-target. 409 `no_ui` from a build without the desktop app (the command-line-only builds).
+`ui`: the desktop app at a screen (`path` one of `transfers` with an optional filter `transfers/active|waiting|held|done|skipped`,
+`activity`, `settings`, `account`, `about`, `popover` (the tray popover) or `signin`; default `transfers/active`; 422
+`invalid` for anything else; `internal/links` holds the list). The agent starts the app with an
+`olsyn-drive://open/<screen>` link; a running app takes the link and shows the screen. This is the one way to a
+screen: notification actions, `olsyn-drive open <screen>`, and `olsyn-drive://open/<screen>` links from the browser
+all end there (`olsyn-drive://show/<screen>` from earlier versions still works). 409 `no_ui` from a build without the
+desktop app (the command-line-only builds).
 
 `GET /v1/cache` → 200 `{"dir": "C:\\Users\\ada\\AppData\\Local\\Olsyn Drive\\Cache", "used_bytes": 3233808384,
 "cap_bytes": 10737418240, "unsent_bytes": 610271232, "unsent_files": 18, "uploaded_bytes": 1395864371,

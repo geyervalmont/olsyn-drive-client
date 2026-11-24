@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/geyervalmont/olsyn-drive-client/internal/links"
 	"github.com/geyervalmont/olsyn-drive-client/internal/settings"
 )
 
@@ -322,24 +323,13 @@ func (a *Agent) hLicences(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]string{"text": a.opts.Licences})
 }
 
-// uiRoutes are the routes the desktop app knows (its links use the same).
-var uiRoutes = []string{"transfers", "activity", "settings", "account", "about", "signin"}
-
-func validUIRoute(route string) bool {
-	head, _, _ := strings.Cut(route, "/")
-	return slices.Contains(uiRoutes, head) && !strings.ContainsAny(route, "?#\\") && len(route) <= 200
-}
-
-// openUI shows the desktop app at a route.
-func (a *Agent) openUI(ctx context.Context, route string) error {
-	route = strings.Trim(route, "/")
-	if route == "" {
-		route = "transfers/active"
+// openUI shows a screen of the desktop app (internal/links names them).
+func (a *Agent) openUI(ctx context.Context, name string) error {
+	screen, err := links.Screen(name)
+	if err != nil {
+		return invalid("path", "path must be a screen: transfers (or transfers/active, waiting, held, done, skipped), activity, settings, account, about or popover.")
 	}
-	if !validUIRoute(route) {
-		return invalid("path", "path must be a window route such as transfers/held.")
-	}
-	if err := a.opts.System.ShowUI(ctx, route); err != nil {
+	if err := a.opts.System.ShowUI(ctx, screen); err != nil {
 		if errors.Is(err, ErrNoUI) {
 			return newAPIError(409, "no_ui", "This build has no desktop window; use the command line.")
 		}

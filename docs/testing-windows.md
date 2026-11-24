@@ -180,3 +180,21 @@ Use the release build (`make windows`), which only connects to https://drive.ols
 folder you may write to. Repeat manual steps 2 to 9 and 13 to 15 without `--server`, inside that test folder only.
 Do not run the fault controls: they exist only on the fake drive. Pass criteria are the same, except the timings, which
 depend on the connection: note them in the report.
+
+## Every screen, by name (for screenshots)
+
+With the agent running, each command brings the window to the front on that screen (the same path notifications
+and `olsyn-drive://open/<screen>` links take):
+
+```
+olsyn-drive open transfers active      (also: waiting, held, done, skipped; or transfers/held)
+olsyn-drive open activity
+olsyn-drive open settings
+olsyn-drive open account
+olsyn-drive open about
+olsyn-drive open popover               (the tray popover)
+start olsyn-drive://open/transfers/held
+```
+
+Signed out, the window shows the setup steps instead of any screen: that is deliberate (the window always shows what
+the agent says).

@@ -16,6 +16,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 	"github.com/wailsapp/wails/v3/pkg/w32"
 
+	"github.com/geyervalmont/olsyn-drive-client/internal/links"
 	"github.com/geyervalmont/olsyn-drive-client/ui/internal/agentconn"
 	"github.com/geyervalmont/olsyn-drive-client/ui/internal/bridge"
 	"github.com/geyervalmont/olsyn-drive-client/ui/internal/tray"
@@ -127,10 +128,14 @@ func Run(ctx context.Context, opts Options) error {
 	})
 
 	startRoute := ""
-	if link, ok := bridge.LinkFromArgs(opts.Args); ok {
+	if link, ok := links.FromArgs(opts.Args); ok {
 		startRoute = s.routeForLink(link)
 	}
-	s.createWindows(startRoute)
+	pageRoute := startRoute
+	if pageRoute == links.Popover {
+		pageRoute = "" // the popover is its own window
+	}
+	s.createWindows(pageRoute)
 	s.createTray()
 
 	s.notifier.OnNotificationResponse(s.notificationClicked)
@@ -434,8 +439,15 @@ func (s *shell) openTarget(t agentconn.OpenTarget) {
 	}
 }
 
-// showMain brings the main window forward, optionally at a route.
+// showMain brings the main window forward, optionally at a route (a
+// screen name from internal/links, or "quit"). The screen "popover" shows
+// the tray popover instead. Every way to a screen ends here: links, the
+// agent's POST /v1/open, notification clicks, the tray menu and the pages.
 func (s *shell) showMain(route string) {
+	if route == links.Popover {
+		s.showPopover()
+		return
+	}
 	if s.popover != nil {
 		s.popover.Hide()
 	}
@@ -447,9 +459,17 @@ func (s *shell) showMain(route string) {
 	s.main.Focus()
 }
 
+// showPopover opens the tray popover next to the tray icon.
+func (s *shell) showPopover() {
+	if s.tray == nil || s.popover == nil {
+		return
+	}
+	s.tray.ShowWindow()
+}
+
 func (s *shell) secondInstance(data application.SecondInstanceData) {
 	route := ""
-	if link, ok := bridge.LinkFromArgs(data.Args); ok {
+	if link, ok := links.FromArgs(data.Args); ok {
 		route = s.routeForLink(link)
 		if route == "" {
 			return // an "open" link was handed to the agent
@@ -458,19 +478,23 @@ func (s *shell) secondInstance(data application.SecondInstanceData) {
 	s.showMain(route)
 }
 
-// routeForLink handles an olsyn-drive:// link: it returns the UI route to
-// show, or "" after handing an "open" link to the agent.
+// routeForLink handles an olsyn-drive:// link: it returns the screen to
+// show, or "" after handing a drive or web link to the agent.
 func (s *shell) routeForLink(link string) string {
-	action, err := bridge.ParseLink(link)
+	action, err := links.Parse(link)
 	if err != nil {
 		s.log.Warn("ignored a link", "err", err)
 		return ""
 	}
-	if action.Kind == "open" {
-		go s.openTarget(agentconn.OpenTarget{Target: "drive", Path: action.DrivePath})
+	switch action.Kind {
+	case links.KindDrive:
+		go s.openTarget(agentconn.OpenTarget{Target: "drive", Path: action.Path})
+		return ""
+	case links.KindWeb:
+		go s.openTarget(agentconn.OpenTarget{Target: "web", Path: action.Path})
 		return ""
 	}
-	return action.Route
+	return action.Screen
 }
 
 // Host implementation for the bridge.

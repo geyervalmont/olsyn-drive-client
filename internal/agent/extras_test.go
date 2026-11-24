@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -25,17 +26,21 @@ func TestFirstRunUntilSignedInOnce(t *testing.T) {
 
 func TestOpenUI(t *testing.T) {
 	h := newHarness(t, nil)
-	if err := h.post("/v1/open", OpenAction{Target: "ui", Path: "transfers/held"}, nil); err != nil {
-		t.Fatal(err)
+	for _, p := range []string{"transfers/held", "popover", "Transfers", ""} {
+		if err := h.post("/v1/open", OpenAction{Target: "ui", Path: p}, nil); err != nil {
+			t.Fatalf("%q: %v", p, err)
+		}
 	}
 	var ae *APIError
-	if err := h.post("/v1/open", OpenAction{Target: "ui", Path: "../../etc"}, nil); !errors.As(err, &ae) || ae.Status != 422 {
-		t.Fatalf("bad route: %v", err)
+	for _, p := range []string{"../../etc", "transfers/nope", "bogus"} {
+		if err := h.post("/v1/open", OpenAction{Target: "ui", Path: p}, nil); !errors.As(err, &ae) || ae.Status != 422 {
+			t.Fatalf("bad screen %q: %v", p, err)
+		}
 	}
 	h.system.mu.Lock()
 	defer h.system.mu.Unlock()
-	if len(h.system.routes) != 1 || h.system.routes[0] != "transfers/held" {
-		t.Fatalf("routes %v", h.system.routes)
+	if want := "transfers/held popover transfers/active transfers/active"; strings.Join(h.system.routes, " ") != want {
+		t.Fatalf("screens %v, want %s", h.system.routes, want)
 	}
 }
 

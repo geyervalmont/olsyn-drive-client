@@ -220,7 +220,7 @@ type System interface {
 	DriveLettersInUse() (map[string]string, error)
 	DownloadsDir() (string, error)
 	FreeDiskBytes(path string) (uint64, error)
-	// ShowUI opens the desktop app at a route ("transfers/held"); ErrNoUI
+	// ShowUI opens the desktop app at a screen (internal/links: "transfers/held", "popover"); ErrNoUI
 	// when this build has no desktop app.
 	ShowUI(ctx context.Context, route string) error
 }

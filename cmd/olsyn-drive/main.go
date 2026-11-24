@@ -63,6 +63,9 @@ Usage: olsyn-drive <command> [options]
   send <path>... --to <drive folder> [--wait] [--on-conflict hold|new-version|keep-both]
                         [--include-online-only]
                         upload files and folders to the drive (they stay on this PC)
+  open <screen>         bring the window to the front on a screen: transfers
+                        [active|waiting|held|done|skipped], activity, settings,
+                        account, about, or popover (the tray popover)
   diagnose              write a diagnostics bundle for support
   quit                  stop the agent (it unmounts the drive)
   version               print the version
@@ -164,6 +167,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return cmdInstall(e, rest)
 	case "uninstall":
 		return cmdUninstall(e, rest)
+	case "open":
+		return cmdOpen(e, rest)
 	case "open-url":
 		return cmdOpenURL(e, rest)
 	case "licences", "licenses":

@@ -251,29 +251,3 @@ func TestBridgeCalls(t *testing.T) {
 		t.Fatalf("host saw %v %v", host.actions, host.urls)
 	}
 }
-
-func TestParseLink(t *testing.T) {
-	cases := []struct {
-		in   string
-		want LinkAction
-		bad  bool
-	}{
-		{"olsyn-drive://", LinkAction{Kind: "show", Route: "transfers/active"}, false},
-		{"olsyn-drive://show/transfers/held", LinkAction{Kind: "show", Route: "transfers/held"}, false},
-		{"OLSYN-DRIVE://show/settings/", LinkAction{Kind: "show", Route: "settings"}, false},
-		{"olsyn-drive://open/Projects/Sample%20Tower/Plans", LinkAction{Kind: "open", DrivePath: "/Projects/Sample Tower/Plans"}, false},
-		{"olsyn-drive://open/Projects/../../x", LinkAction{}, true},
-		{"olsyn-drive://show/../../etc", LinkAction{}, true},
-		{"olsyn-drive://format/C", LinkAction{}, true},
-		{"https://drive.olsyn.com", LinkAction{}, true},
-	}
-	for _, c := range cases {
-		got, err := ParseLink(c.in)
-		if (err != nil) != c.bad || got != c.want {
-			t.Errorf("ParseLink(%q) = %+v, %v", c.in, got, err)
-		}
-	}
-	if l, ok := LinkFromArgs([]string{"--background", "olsyn-drive://show/activity"}); !ok || l != "olsyn-drive://show/activity" {
-		t.Fatal("LinkFromArgs")
-	}
-}
