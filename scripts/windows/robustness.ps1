@@ -9,9 +9,11 @@
   against a fake drive with a fresh OLSYN_DRIVE_HOME, signs in, mounts the
   drive, then performs and checks:
 
-    a  500 files and one 1 GiB file copied onto the drive; the agent is
-       killed (taskkill /f) mid-upload and restarted; the large file
-       resumes from its finished parts (the fake drive's part counters).
+    a  500 files and one 1 GiB file copied onto the drive with uploads
+       throttled to 16 MiB/s; the agent is killed (taskkill /f) while parts
+       are still to send and restarted; the large file resumes from its
+       finished parts and none is sent twice (the fake drive's part
+       counters).
     b  the fake drive offline for 60 s during a copy: reading data that is
        not cached fails or answers within 2 s, writes go on into the cache,
        and the backlog drains afterwards.
@@ -61,20 +63,47 @@ $ErrorActionPreference = 'Stop'
 
 $ResultDir = Split-Path -Parent $Result
 if (-not (Test-Path $ResultDir)) { New-Item -ItemType Directory -Path $ResultDir | Out-Null }
-Set-Content -Path $Result -Value "olsyn-drive robustness $(Get-Date -Format s)" -Encoding UTF8
 $script:Fails = 0
+
+function Write-Result {
+  <# Writes one line to the result file. Another program reading the file at
+     that moment (an editor, a log viewer, a test harness collecting it) can
+     hold it briefly: the write is tried again for up to 10 s, sharing the
+     file with readers, and a line that still cannot be written is shown on
+     the console rather than failing the check that wrote it. #>
+  param([string] $Line, [switch] $Create)
+  $mode = [System.IO.FileMode]::Append
+  if ($Create) { $mode = [System.IO.FileMode]::Create }
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($Line + [Environment]::NewLine)
+  $deadline = (Get-Date).AddSeconds(10)
+  while ($true) {
+    try {
+      $f = [System.IO.File]::Open($Result, $mode, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+      try { $f.Write($bytes, 0, $bytes.Length) } finally { $f.Dispose() }
+      return
+    } catch [System.IO.IOException] {
+      if ((Get-Date) -gt $deadline) {
+        Write-Warning "could not write to $Result ($($_.Exception.Message)): $Line"
+        return
+      }
+      Start-Sleep -Milliseconds 100
+    }
+  }
+}
+
+Write-Result "olsyn-drive robustness $(Get-Date -Format s)" -Create
 
 function Step {
   param([string] $Name, [bool] $Ok, [string] $Detail = '')
   if ($Ok) { $line = "PASS  $Name" } else { $line = "FAIL  $Name"; $script:Fails++ }
   if ($Detail) { $line += ": $Detail" }
-  Add-Content -Path $Result -Value $line -Encoding UTF8
+  Write-Result $line
   Write-Output $line
 }
 
 function Note {
   param([string] $Text)
-  Add-Content -Path $Result -Value "NOTE  $Text" -Encoding UTF8
+  Write-Result "NOTE  $Text"
   Write-Output "NOTE  $Text"
 }
 
@@ -367,22 +396,35 @@ try {
     $bigSize = [int64]1GB
     New-TestFile (Join-Path $src 'big.bin') $bigSize 7
     $parts = [int][Math]::Ceiling($bigSize / 16MB) # the fake drive's part size
-    $base = Get-Count (Get-Counts) 'part.put.multipart'
+    # Over loopback the whole file goes up in a few seconds, before the kill
+    # can land. Throttle the agent's uploads (16 MiB/s: about a minute for
+    # the file) so the kill finds parts still to send.
+    $throttle = Invoke-Agent PATCH '/v1/settings' '{"bandwidth":{"up_bps":16777216}}'
+    Step 'a: uploads throttled to 16 MiB/s for the kill' ($throttle.Status -eq 200) "status $($throttle.Status)"
+    $counts = Get-Counts
+    $base = Get-Count $counts 'part.stored.multipart'
+    $baseAgain = Get-Count $counts 'part.stored.again'
     $dst = Join-Path $DriveRoot 'a'
     $t = Measure-Seconds { Copy-Item -LiteralPath $src -Destination $dst -Recurse }
     Step 'a: 500 files and 1 GiB copied onto the drive' ($t.Error -eq $null) ("{0:N1} s {1}" -f $t.Seconds, $t.Error)
     $quarter = [int]($parts / 4)
-    $ok = Wait-Until -Seconds 900 -Test { (Get-Count (Get-Counts) 'part.put.multipart') - $base -ge $quarter }
-    $done = (Get-Count (Get-Counts) 'part.put.multipart') - $base
+    $ok = Wait-Until -Seconds 900 -Test { (Get-Count (Get-Counts) 'part.stored.multipart') - $base -ge $quarter }
     taskkill /f /pid $script:agent.Id | Out-Null
-    Step 'a: agent killed while the large file was uploading' $ok "$done of $parts parts sent at the kill"
+    $done = (Get-Count (Get-Counts) 'part.stored.multipart') - $base
+    Step 'a: agent killed while the large file was uploading' ($ok -and $done -lt $parts) "$done of $parts parts stored at the kill"
     Start-Sleep -Seconds 2
     Step 'a: agent restarts' (Start-Agent)
     Step 'a: drive mounted again' (Wait-Mounted)
+    $unthrottle = Invoke-Agent PATCH '/v1/settings' '{"bandwidth":{"up_bps":0}}'
+    Step 'a: upload limit lifted after the restart' ($unthrottle.Status -eq 200) "status $($unthrottle.Status)"
     Step 'a: every file sent after the restart' (Wait-Drained -Seconds 1800)
-    $total = (Get-Count (Get-Counts) 'part.put.multipart') - $base
-    # From the start again would be at least $done + $parts; resuming re-sends at most the parts in flight.
-    Step 'a: the large file resumed from its finished parts' (($total -ge $parts) -and ($total -lt $done + $parts)) "$total part uploads for $parts parts ($done before the kill)"
+    $counts = Get-Counts
+    $total = (Get-Count $counts 'part.stored.multipart') - $base
+    $again = (Get-Count $counts 'part.stored.again') - $baseAgain
+    # Resuming sends each part not stored before the kill once (a part cut
+    # off mid-way by the kill was never stored); a part stored before the
+    # kill is never sent again.
+    Step 'a: the large file resumed from its finished parts' (($done -lt $parts) -and ($total -eq $parts) -and ($again -eq 0)) "$total parts stored for $parts ($done before the kill, $again stored twice)"
     $diff = Compare-Trees (Get-LocalTree $src) (Get-DriveTree "/$Root/a")
     Step 'a: the drive holds the same 501 files' ($diff.Count -eq 0) (($diff | Select-Object -First 5) -join '; ')
     Remove-Item -Recurse -Force $src
@@ -606,7 +648,7 @@ finally {
 }
 
 if ($script:Fails -eq 0) { $summary = 'All checks passed.' } else { $summary = "$($script:Fails) check(s) failed." }
-Add-Content -Path $Result -Value $summary -Encoding UTF8
+Write-Result $summary
 Write-Output $summary
 Write-Output "results: $Result"
 exit $script:Fails
