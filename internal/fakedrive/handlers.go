@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/geyervalmont/olsyn-drive-client/internal/driveapi"
@@ -47,6 +49,43 @@ func (s *Server) routes() http.Handler {
 	return s.faulty(mux)
 }
 
+// jitter draws random delays from a seeded generator (see SetJitter).
+type jitter struct {
+	mu  sync.Mutex
+	max time.Duration
+	rng *rand.Rand
+}
+
+func newJitter(seed uint64, max time.Duration) *jitter {
+	return &jitter{max: max, rng: rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15))}
+}
+
+func (j *jitter) next() time.Duration {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return time.Duration(j.rng.Int64N(int64(j.max)))
+}
+
+// lateAnswer holds an answer back for a moment after the handler has made
+// its change, as a slow network would.
+type lateAnswer struct {
+	http.ResponseWriter
+	delay time.Duration
+	once  sync.Once
+}
+
+func (l *lateAnswer) wait() { l.once.Do(func() { time.Sleep(l.delay) }) }
+
+func (l *lateAnswer) WriteHeader(code int) {
+	l.wait()
+	l.ResponseWriter.WriteHeader(code)
+}
+
+func (l *lateAnswer) Write(b []byte) (int, error) {
+	l.wait()
+	return l.ResponseWriter.Write(b)
+}
+
 // faulty applies intercepts, the offline switch, the deploy window and latency.
 func (s *Server) faulty(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -67,6 +106,14 @@ func (s *Server) faulty(next http.Handler) http.Handler {
 			case <-r.Context().Done():
 				return
 			}
+		}
+		if f.jitter != nil && r.Method != http.MethodGet && r.Method != http.MethodHead {
+			select {
+			case <-time.After(f.jitter.next()):
+			case <-r.Context().Done():
+				return
+			}
+			w = &lateAnswer{ResponseWriter: w, delay: f.jitter.next()}
 		}
 		storage := strings.HasPrefix(r.URL.Path, "/s3/")
 		if !storage && time.Now().Before(f.unavailableUntil) {

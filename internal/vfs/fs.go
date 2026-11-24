@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/geyervalmont/olsyn-drive-client/internal/cache"
@@ -33,9 +34,18 @@ type FS struct {
 	// the changes feed) so read-modify-write sequences do not interleave.
 	treeMu sync.Mutex
 
-	mu       sync.Mutex
-	open     map[string]*openNode
-	pending  map[string]int // local id -> queued journal ops
+	// finished counts changes that reached the drive; touched holds, by
+	// drive id, the count when each node was last changed from here (see
+	// changedSince). touched is guarded by mu.
+	finished atomic.Uint64
+	touched  map[string]touchedAt
+
+	mu      sync.Mutex
+	open    map[string]*openNode
+	pending map[string]int // local id -> queued journal ops
+	// deleting: queued deletes, by drive id, or by folder and name (see
+	// deleteKeys); what the drive still shows of them is not brought back
+	deleting map[string]int
 	inflight map[uint64]*running
 	listing  map[string]*listCall
 	state    State
@@ -65,6 +75,11 @@ type running struct {
 	op        journal.Op
 	cancel    context.CancelFunc
 	cancelled bool
+}
+
+type touchedAt struct {
+	gen uint64
+	at  time.Time
 }
 
 type listCall struct {
@@ -113,7 +128,7 @@ func New(cfg Config) (*FS, error) {
 		cfg.ReleaseInterval = 30 * time.Second
 	}
 	fs := &FS{release: cfg.Release.WithDefaults(), cfg: cfg, api: cfg.API, eng: cfg.Engine, idx: cfg.Index, cache: cfg.Cache, jr: cfg.Journal, log: cfg.Logger,
-		open: map[string]*openNode{}, pending: map[string]int{}, inflight: map[uint64]*running{}, displaced: map[string]displacedFile{},
+		open: map[string]*openNode{}, pending: map[string]int{}, deleting: map[string]int{}, touched: map[string]touchedAt{}, inflight: map[uint64]*running{}, displaced: map[string]displacedFile{},
 		uploading: map[string]string{}, listing: map[string]*listCall{}, state: StateOnline,
 		subs: map[int]chan Event{}, kick: make(chan struct{}, 1), wake: make(chan struct{}, 1)}
 	if err := fs.recover(); err != nil {
@@ -137,13 +152,25 @@ func (fs *FS) recover() error {
 	if err != nil {
 		return fmt.Errorf("vfs: read journal: %w", err)
 	}
+	deleted := map[string]bool{}
+	for _, op := range ops {
+		if op.Kind == journal.OpDelete {
+			deleted[op.NodeID] = true
+		}
+	}
 	for _, op := range ops {
 		fs.pending[op.NodeID]++
+		for _, k := range deleteKeys(op) {
+			fs.deleting[k]++
+		}
 		if op.Kind != journal.OpUpload && op.Kind != journal.OpMkdir {
 			continue
 		}
 		e, err := fs.idx.Get(op.NodeID)
 		if errors.Is(err, index.ErrNotFound) {
+			if deleted[op.NodeID] {
+				continue // deleted here: the op only cleans up on the drive
+			}
 			// queued but the index write was lost: rebuild the local entry
 			if _, perr := fs.idx.Get(op.ParentID); perr != nil {
 				continue
@@ -485,7 +512,14 @@ func (fs *FS) startListing(dir *index.Entry) *listCall {
 	return c
 }
 
+// fetchListing reads a folder's children from the drive into the index.
+// Children the drive did not list are dropped. What the answer says about
+// a node one of this PC's changes reached the drive for while the answer
+// was on its way (a folder made, a file sent, moved in or out, renamed or
+// trashed just after the drive answered) is older than what the index
+// holds: it is skipped (see changedSince).
 func (fs *FS) fetchListing(ctx context.Context, id, sid string) error {
+	before := fs.finished.Load()
 	kids, err := fs.api.AllChildren(ctx, sid)
 	if err != nil {
 		fs.noteErr(err)
@@ -508,12 +542,15 @@ func (fs *FS) fetchListing(ctx context.Context, id, sid string) error {
 		seen := map[string]bool{}
 		for i := range kids {
 			seen[kids[i].ID] = true
+			if fs.changedSince(kids[i].ID, before) {
+				continue
+			}
 			if err := fs.mergeNode(tx, &kids[i], id); err != nil {
 				return err
 			}
 		}
 		for _, c := range existing {
-			if c.ServerID == "" || seen[c.ServerID] || c.LocalOnly || fs.isPendingTree(tx, c.ID) {
+			if c.ServerID == "" || seen[c.ServerID] || c.LocalOnly || fs.isPendingTree(tx, c.ID) || fs.changedSince(c.ServerID, before) {
 				continue
 			}
 			if _, err := tx.Delete(c.ID); err != nil && !errors.Is(err, index.ErrNotFound) {
@@ -522,6 +559,40 @@ func (fs *FS) fetchListing(ctx context.Context, id, sid string) error {
 		}
 		return tx.SetListed(id, true)
 	})
+}
+
+// touchedKeep is how long a node's last change is remembered for
+// changedSince: far longer than any answer takes to arrive.
+const touchedKeep = 10 * time.Minute
+
+// touch records that a change of this PC reached the drive for node sid.
+func (fs *FS) touch(sids ...string) {
+	gen := fs.finished.Add(1)
+	now := time.Now()
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	for _, sid := range sids {
+		if sid != "" {
+			fs.touched[sid] = touchedAt{gen: gen, at: now}
+		}
+	}
+	if gen%1024 == 0 {
+		for sid, t := range fs.touched {
+			if now.Sub(t.at) > touchedKeep {
+				delete(fs.touched, sid)
+			}
+		}
+	}
+}
+
+// changedSince reports a node one of this PC's changes reached the drive
+// for after the finished count was before: an answer asked for before
+// then may describe it as it was.
+func (fs *FS) changedSince(sid string, before uint64) bool {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	t, ok := fs.touched[sid]
+	return ok && t.gen > before
 }
 
 // relist refreshes a folder in the background (after a resync). A listing
@@ -550,6 +621,11 @@ func (fs *FS) mergeNode(tx *index.Tx, n *driveapi.Node, parent string) error {
 		return nil // shortcuts are not shown on the mount yet
 	}
 	if n.ID == fs.cfg.RootID {
+		return nil
+	}
+	if fs.beingDeleted(n.ID, parent, n.Name) {
+		// deleted here, not yet in the drive's trash: an answer or feed
+		// entry from before must not bring it back
 		return nil
 	}
 	ex, err := tx.BySID(n.ID)

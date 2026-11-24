@@ -57,6 +57,7 @@ func (fs *FS) pollChanges(ctx context.Context) error {
 		since = -1
 	}
 	for {
+		before := fs.finished.Load()
 		p, err := fs.api.Changes(ctx, since, driveapi.ChangesMaxPage, "")
 		if err != nil {
 			return err
@@ -72,6 +73,11 @@ func (fs *FS) pollChanges(ctx context.Context) error {
 		err = fs.idx.Update(func(tx *index.Tx) error {
 			relist, outcomes = relist[:0], outcomes[:0]
 			for i := range p.Changes {
+				if ch := &p.Changes[i]; ch.Node != nil && fs.changedSince(ch.Node.ID, before) {
+					// this PC changed it after the page was read: the page
+					// may show it as it was (a later page has what it is)
+					continue
+				}
 				if err := fs.applyChange(tx, &p.Changes[i], &relist); err != nil {
 					return err
 				}

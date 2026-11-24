@@ -87,6 +87,7 @@ type Server struct {
 
 type faults struct {
 	latency           time.Duration
+	jitter            *jitter // random delays before and after state-changing calls
 	unavailableUntil  time.Time
 	offline           bool
 	dropDownloads     int
@@ -545,6 +546,22 @@ func (s *Server) SetLatency(d time.Duration) {
 	s.mu.Lock()
 	s.faults.latency = d
 	s.mu.Unlock()
+}
+
+// SetJitter delays every state-changing call (POST, PUT, PATCH, DELETE) by
+// a random time below max before it is handled, and its answer by another
+// random time after the change is made, so a client sees changes land on
+// the drive while it still waits for the answer (a call cut short can have
+// taken effect). The delays come from a generator seeded with seed, so a
+// run with the same seed draws the same sequence. Zero max turns it off.
+func (s *Server) SetJitter(seed uint64, max time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if max <= 0 {
+		s.faults.jitter = nil
+		return
+	}
+	s.faults.jitter = newJitter(seed, max)
 }
 
 // Unavailable answers every API route (not storage) with 503 and

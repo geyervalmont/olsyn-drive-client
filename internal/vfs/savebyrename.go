@@ -93,11 +93,11 @@ func (fs *FS) adoptVersion(ctx context.Context, src, orig *index.Entry, displace
 			fs.doneLocked(journal.Op{NodeID: orig.ID})
 		}
 	} else {
-		fs.dropOps(map[string]bool{orig.ID: true}, "")
+		fs.dropOps(map[string]bool{orig.ID: true}, nil)
 	}
 	// the temp file's own changes (Excel's temp may already be queued as a
 	// new file) are replaced by the upload below
-	fs.dropOps(map[string]bool{src.ID: true}, "")
+	fs.dropOps(map[string]bool{src.ID: true}, nil)
 
 	fs.treeMu.Lock()
 	defer fs.treeMu.Unlock()

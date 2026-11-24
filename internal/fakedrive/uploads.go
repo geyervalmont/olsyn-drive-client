@@ -196,6 +196,14 @@ func (s *Server) storagePut(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if u.method == driveapi.MethodMultipart {
+		// for resume checks: parts stored, and parts stored again after
+		// they had been stored whole (a finished part sent twice)
+		s.counts["part.stored.multipart"]++
+		if old, ok := u.parts[number]; ok && old.seg.size == u.partLen(number) {
+			s.counts["part.stored.again"]++
+		}
+	}
 	u.parts[number] = part{seg: seg, etag: tag}
 	w.Header().Set("ETag", tag)
 	w.WriteHeader(http.StatusOK)

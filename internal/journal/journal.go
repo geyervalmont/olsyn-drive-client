@@ -78,6 +78,15 @@ type Op struct {
 	IsDir    bool      `json:"dir,omitempty"`
 	MTime    time.Time `json:"mtime,omitzero"`
 
+	// Renames: where the node was before (its folder's local id and its
+	// name), so a change that takes that name waits for this one.
+	FromParent string `json:"from_parent,omitempty"`
+	FromName   string `json:"from_name,omitempty"`
+
+	// WaitFor lists earlier operations this one must not overtake (a
+	// folder's delete waits for moves out of it to reach the drive).
+	WaitFor []uint64 `json:"wait,omitempty"`
+
 	// Uploads.
 	ContentKey    string `json:"ckey,omitempty"`
 	Size          int64  `json:"size,omitempty"`
@@ -90,7 +99,9 @@ type Op struct {
 	CRC uint32 `json:"crc,omitempty"`
 
 	// ServerID is the drive id of the node when it was known at queue time
-	// (deletes of nodes no longer in the index).
+	// (deletes of nodes no longer in the index), or, for a folder create,
+	// the folder made on the drive for a folder deleted here meanwhile
+	// (still to be sent to the trash).
 	ServerID string `json:"sid,omitempty"`
 
 	// Retry and refusal bookkeeping.

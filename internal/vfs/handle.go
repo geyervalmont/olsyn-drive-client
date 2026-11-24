@@ -272,6 +272,9 @@ func (fs *FS) queue(op journal.Op) error {
 func (fs *FS) queueSeq(op journal.Op) (uint64, error) {
 	fs.mu.Lock()
 	fs.pending[op.NodeID]++
+	for _, k := range deleteKeys(op) {
+		fs.deleting[k]++
+	}
 	fs.mu.Unlock()
 	written, err := fs.jr.Write(op)
 	if err != nil {
@@ -847,7 +850,17 @@ func (fs *FS) Remove(ctx context.Context, path string) error {
 
 // removeEntry deletes a node and its subtree locally and queues the drive
 // delete (to the trash). Unsent changes inside are dropped: the person
-// deleted them.
+// deleted them. What the drive may already hold of them is cleaned up too:
+//
+//   - a node inside that has a move queued may still sit outside the
+//     folder on the drive: it is sent to the trash by its own drive id;
+//   - a new file whose upload has started may finish on the drive (or have
+//     finished, the answer still on its way): its upload stays queued to
+//     abort the session or trash what it made (see discardUpload);
+//   - a new folder being made on the drive is made, then trashed.
+//
+// Each of those gets a delete record in the journal, after the change it
+// replaces, so that a new file or folder of the same name waits for it.
 func (fs *FS) removeEntry(_ context.Context, id, path string) error {
 	fs.treeMu.Lock()
 	defer fs.treeMu.Unlock()
@@ -858,11 +871,64 @@ func (fs *FS) removeEntry(_ context.Context, id, path string) error {
 	if err != nil {
 		return newErr(KindOther, "delete", path, err)
 	}
-	if e.ServerID != "" && !e.LocalOnly {
-		if err := fs.queue(journal.Op{Kind: journal.OpDelete, NodeID: e.ID, ParentID: e.ParentID, Name: e.Name,
-			ServerID: e.ServerID, IsDir: e.IsDir()}); err != nil {
+	var subtree []*index.Entry
+	if err := fs.idx.View(func(tx *index.Tx) error {
+		subtree, err = collectSubtree(tx, e)
+		return err
+	}); err != nil {
+		return newErr(KindOther, "delete", path, err)
+	}
+	ops, err := fs.jr.List()
+	if err != nil {
+		return newErr(KindOther, "delete", path, err)
+	}
+	inside := map[string]bool{}
+	for _, r := range subtree {
+		inside[r.ID] = true
+	}
+	moved, sending := map[string]bool{}, map[string]bool{}
+	var movedOut []uint64 // moves out of the subtree not yet on the drive
+	fs.mu.Lock()
+	for _, op := range ops {
+		switch op.Kind {
+		case journal.OpRename:
+			moved[op.NodeID] = true
+			if inside[op.FromParent] && !inside[op.NodeID] {
+				movedOut = append(movedOut, op.Seq)
+			}
+		case journal.OpUpload:
+			if op.UploadID != "" || fs.inflight[op.Seq] != nil {
+				sending[op.NodeID] = true
+			}
+		case journal.OpMkdir:
+			if fs.inflight[op.Seq] != nil {
+				sending[op.NodeID] = true
+			}
+		}
+	}
+	fs.mu.Unlock()
+	keep := map[uint64]bool{}
+	for _, r := range subtree {
+		if r.LocalOnly {
+			continue
+		}
+		del := journal.Op{Kind: journal.OpDelete, NodeID: r.ID, ParentID: r.ParentID, Name: r.Name, ServerID: r.ServerID, IsDir: r.IsDir()}
+		switch {
+		case r.ServerID != "" && (r.ID == e.ID || moved[r.ID]):
+			// what was moved out of it must leave on the drive first,
+			// or it goes to the trash with it
+			del.WaitFor = movedOut
+		case r.ServerID == "" && sending[r.ID]:
+			// nothing to trash yet: holds the name until the upload or
+			// folder create before it has been undone
+		default:
+			continue
+		}
+		seq, err := fs.queueSeq(del)
+		if err != nil {
 			return err
 		}
+		keep[seq] = true
 	}
 	var removed []*index.Entry
 	err = fs.idx.Update(func(tx *index.Tx) (err error) {
@@ -876,7 +942,7 @@ func (fs *FS) removeEntry(_ context.Context, id, path string) error {
 	for _, r := range removed {
 		gone[r.ID] = true
 	}
-	fs.dropOps(gone, id)
+	fs.dropOps(gone, keep)
 	for _, r := range removed {
 		if r.ContentKey != "" {
 			_ = fs.cache.Remove(r.ContentKey)
@@ -886,36 +952,93 @@ func (fs *FS) removeEntry(_ context.Context, id, path string) error {
 	return nil
 }
 
-// dropOps cancels queued and running changes of deleted nodes (except the
-// delete op of keep).
-func (fs *FS) dropOps(gone map[string]bool, keep string) {
+// collectSubtree lists e and everything below it.
+func collectSubtree(tx *index.Tx, e *index.Entry) ([]*index.Entry, error) {
+	out := []*index.Entry{e}
+	for i := 0; i < len(out) && i < 1<<20; i++ {
+		if !out[i].IsDir() {
+			continue
+		}
+		kids, err := tx.Children(out[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, kids...)
+	}
+	return out, nil
+}
+
+// dropOps cancels queued and running changes of deleted nodes, except the
+// ops in keep. Two kinds are left to finish, because the drive may already
+// have what they made: a folder create that is running (it trashes the
+// folder it made, see execMkdir), and an upload of a node no longer in the
+// index that has a session (it aborts the session or trashes the file, see
+// discardUpload). A running upload is cancelled and then does the same.
+func (fs *FS) dropOps(gone map[string]bool, keep map[uint64]bool) {
 	ops, err := fs.jr.List()
 	if err != nil {
 		fs.log.Warn("vfs: read journal", "err", err)
 		return
 	}
 	for _, op := range ops {
-		if !gone[op.NodeID] || (op.NodeID == keep && op.Kind == journal.OpDelete) {
+		if !gone[op.NodeID] || keep[op.Seq] {
 			continue
 		}
 		fs.mu.Lock()
 		r := fs.inflight[op.Seq]
-		if r != nil {
+		if r != nil && op.Kind != journal.OpMkdir {
 			r.cancelled = true
 			r.cancel()
 		}
 		fs.mu.Unlock()
-		if r == nil {
-			if err := fs.jr.Done(op.Seq); err == nil {
-				fs.doneLocked(op)
+		if r != nil {
+			continue
+		}
+		if op.Kind == journal.OpUpload && op.UploadID != "" {
+			if _, err := fs.idx.Get(op.NodeID); errors.Is(err, index.ErrNotFound) {
+				continue
 			}
 		}
+		if err := fs.jr.Done(op.Seq); err == nil {
+			fs.doneLocked(op)
+		}
 	}
+}
+
+// deleteKeys names what a queued delete removes: the drive id, or (for a
+// file or folder deleted before the drive gave it an id) its folder and name.
+func deleteKeys(op journal.Op) []string {
+	switch {
+	case op.Kind != journal.OpDelete:
+		return nil
+	case op.ServerID != "":
+		return []string{op.ServerID}
+	default:
+		return []string{"\x00" + op.ParentID + "\x00" + index.Fold(op.Name)}
+	}
+}
+
+// beingDeleted reports a drive node (sid, in the folder with local id
+// parent, under name) that a queued delete removes.
+func (fs *FS) beingDeleted(sid, parent, name string) bool {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	if len(fs.deleting) == 0 {
+		return false
+	}
+	return fs.deleting[sid] > 0 || fs.deleting[deleteKeys(journal.Op{Kind: journal.OpDelete, ParentID: parent, Name: name})[0]] > 0
 }
 
 func (fs *FS) doneLocked(op journal.Op) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
+	for _, k := range deleteKeys(op) {
+		if fs.deleting[k] > 1 {
+			fs.deleting[k]--
+		} else {
+			delete(fs.deleting, k)
+		}
+	}
 	if fs.pending[op.NodeID] > 0 {
 		fs.pending[op.NodeID]--
 	}
@@ -1019,6 +1142,7 @@ func (fs *FS) Rename(ctx context.Context, from, to string, replace bool) error {
 		return newErr(KindNotFound, "rename", from, err)
 	}
 	wasJunk := cur.LocalOnly
+	fromParent, fromName := cur.ParentID, cur.Name
 	cur.ParentID, cur.Name = dst.ID, name
 	cur.LocalOnly = dst.LocalOnly || (wasJunk && IsJunk(name))
 	switch {
@@ -1030,7 +1154,8 @@ func (fs *FS) Rename(ctx context.Context, from, to string, replace bool) error {
 		}
 		err = fs.queue(op)
 	case !wasJunk:
-		op := journal.Op{Kind: journal.OpRename, NodeID: cur.ID, ParentID: dst.ID, Name: name, ServerID: cur.ServerID}
+		op := journal.Op{Kind: journal.OpRename, NodeID: cur.ID, ParentID: dst.ID, Name: name, ServerID: cur.ServerID,
+			FromParent: fromParent, FromName: fromName}
 		displaced := cur.ServerID != "" && !cur.IsDir() && isSaveTemp(name) && dst.ID == src.ParentID
 		if displaced {
 			// Word renames the original to a temp name, then its new copy to
