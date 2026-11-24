@@ -5,5 +5,3 @@ node_modules/
 .DS_Store
 # written by ui/winres before each Windows build (make)
 cmd/olsyn-drive/rsrc_windows_*.syso
-# the WinFsp installer, copied from build/ by make before embedding (never committed)
-internal/winfspmsi/winfsp.msi

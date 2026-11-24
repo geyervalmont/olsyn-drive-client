@@ -66,6 +66,7 @@ func (a *Agent) handler() http.Handler {
 	route("/v1/update/check", post(a.hUpdateCheck))
 	route("/v1/update/apply", post(a.hUpdateApply))
 	route("/v1/driver/install", post(a.hDriverInstall))
+	route("/v1/driver/check", post(a.hDriverCheck))
 	route("/v1/diagnostics", post(a.hDiagnostics))
 	route("/v1/open", post(a.hOpen))
 	route("/v1/quit", post(a.hQuit))
@@ -509,7 +510,7 @@ func (a *Agent) hDriverInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a.driver.State != "installing" {
-		a.driver.State, a.driver.Error, a.driver.Progress = "installing", nil, platform.DriverStepPreparing
+		a.driver.State, a.driver.Error, a.driver.Progress, a.driver.Download = "installing", nil, platform.DriverStepDownloading, nil
 		runCtx := a.ctx
 		go a.installDriver(runCtx)
 	}
@@ -520,16 +521,19 @@ func (a *Agent) hDriverInstall(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Agent) installDriver(ctx context.Context) {
-	err := a.opts.System.InstallDriver(ctx, func(step string) {
+	err := a.opts.System.InstallDriver(ctx, func(p platform.DriverProgress) {
 		a.mu.Lock()
 		if a.driver.State == "installing" {
-			a.driver.Progress = step
+			a.driver.Progress, a.driver.Download = p.Step, nil
+			if p.Step == platform.DriverStepDownloading {
+				a.driver.Download = &Progress{BytesDone: p.Done, BytesTotal: p.Total}
+			}
 		}
 		a.mu.Unlock()
 		a.emitState()
 	})
 	a.mu.Lock()
-	a.driver.State, a.driver.Progress = "", ""
+	a.driver.State, a.driver.Progress, a.driver.Download = "", "", nil
 	if errors.Is(err, platform.ErrRestartNeeded) {
 		a.driverRestart = true
 	}
@@ -538,6 +542,8 @@ func (a *Agent) installDriver(ctx context.Context) {
 	case err == nil, errors.Is(err, platform.ErrRestartNeeded):
 	case errors.Is(err, platform.ErrDeclined):
 		a.driver.Error = &Problem{"declined", "The administrator prompt was declined."}
+	case errors.Is(err, platform.ErrDriverUnavailable):
+		a.driver.Error = &Problem{"download_failed", driverUnavailableMessage}
 	default:
 		a.driver.Error = &Problem{"install_failed", "The driver could not be installed: " + err.Error()}
 	}
@@ -553,6 +559,31 @@ func (a *Agent) installDriver(ctx context.Context) {
 	if wantMount {
 		a.doMount(ctx)
 	}
+}
+
+// driverUnavailableMessage is the driver error when its installer could not
+// be downloaded or failed its checks.
+const driverUnavailableMessage = "WinFsp could not be downloaded from its publisher on this PC (no connection, or the download is blocked), so nothing was installed. You can install WinFsp yourself from its download page, then choose Check again."
+
+// hDriverCheck detects the driver again, for a person who installed it by
+// hand. While an install runs it only reports.
+func (a *Agent) hDriverCheck(w http.ResponseWriter, r *http.Request) {
+	a.mu.Lock()
+	if a.driver.State != "installing" {
+		prev := a.driver.Error
+		a.refreshDriverLocked()
+		if (a.driver.State == "missing" || a.driver.State == "outdated") && prev != nil && prev.Code == "download_failed" {
+			a.driver.Error = prev // still not there: the way forward is unchanged
+		}
+	}
+	d := a.driver
+	wantMount := a.mountWanted && a.letterConfirmed && a.driver.State == "ok" && a.mount.State != MountMounted && a.phase == phaseRunning
+	a.mu.Unlock()
+	a.emitState()
+	if wantMount {
+		go a.doMount(a.ctx)
+	}
+	writeJSON(w, 200, d)
 }
 
 func (a *Agent) hDiagnostics(w http.ResponseWriter, r *http.Request) {

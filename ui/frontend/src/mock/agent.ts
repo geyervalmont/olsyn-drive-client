@@ -213,6 +213,7 @@ export class MockAgent {
   /** The person has chosen the drive letter (first run: not yet). */
   private letterConfirmed = true
   private declinedOnce = false
+  private downloadFailedOnce = false
   /** Letters something else holds on this "PC". */
   private lettersInUse: Record<string, LetterUse> = { 'D:': 'volume' }
 
@@ -222,9 +223,10 @@ export class MockAgent {
 
   private setup() {
     const s = this.scenario
-    if (s === 'first-run' || s === 'signin' || s === 'link-expired' || s === 'letter-taken' || s === 'driver-restart' || s === 'driver-declined') {
+    if (s === 'first-run' || s === 'signin' || s === 'link-expired' || s === 'letter-taken' || s === 'driver-restart' || s === 'driver-declined' || s === 'driver-offline') {
       this.letterConfirmed = false
-      if (s === 'first-run' || s === 'driver-restart' || s === 'driver-declined') this.driver = { state: 'missing', name: 'winfsp', version: null, min_version: '2.0', error: null }
+      if (s === 'first-run' || s === 'driver-restart' || s === 'driver-declined' || s === 'driver-offline')
+        this.driver = { state: 'missing', name: 'winfsp', version: null, min_version: '2.0', error: null, download_page: 'https://winfsp.dev/rel/' }
       if (s === 'letter-taken') this.lettersInUse = { 'D:': 'volume', 'O:': 'network', 'W:': 'network' }
       return
     }
@@ -749,6 +751,8 @@ export class MockAgent {
         return this.applyUpdate(b)
       case 'POST /v1/driver/install':
         return this.installDriver()
+      case 'POST /v1/driver/check':
+        return this.checkDriver()
       case 'POST /v1/diagnostics':
         return ok({ path: localPath('C:', 'Users', 'ada', 'Downloads', 'olsyn-drive-diagnostics-20261124T031507Z.zip'), size: 482113 })
       case 'POST /v1/open':
@@ -1059,7 +1063,20 @@ export class MockAgent {
   private installDriver(): MockResponse {
     if (this.driver.state === 'restart_needed') return err(409, 'driver_restart_needed', 'Sign out of Windows and back in to finish adding WinFsp.')
     if (this.driver.state === 'installing') return ok(this.driver, 202)
-    this.driver = { ...this.driver, state: 'installing', progress: 'preparing', error: null }
+    const total = 2220032
+    this.driver = { ...this.driver, state: 'installing', progress: 'downloading', download: { bytes_done: 0, bytes_total: total }, error: null }
+    this.at(0.2, () => (this.driver = { ...this.driver, download: { bytes_done: Math.round(total / 2), bytes_total: total } }))
+    if (this.scenario === 'driver-offline' && !this.downloadFailedOnce) {
+      this.downloadFailedOnce = true
+      this.at(0.6, () => {
+        this.driver = {
+          state: 'missing', name: 'winfsp', version: null, min_version: '2.0', download_page: 'https://winfsp.dev/rel/',
+          error: { code: 'download_failed', message: 'WinFsp could not be downloaded from its publisher on this PC (no connection, or the download is blocked), so nothing was installed. You can install WinFsp yourself from its download page, then choose Check again.' },
+        }
+      })
+      return ok(this.driver, 202)
+    }
+    this.at(0.4, () => (this.driver = { ...this.driver, progress: 'preparing', download: null }))
     this.at(0.8, () => (this.driver = { ...this.driver, progress: 'approval' }))
     if (this.scenario === 'driver-declined' && !this.declinedOnce) {
       this.declinedOnce = true
@@ -1083,6 +1100,15 @@ export class MockAgent {
       }
     })
     return ok(this.driver, 202)
+  }
+
+  /** The person installed WinFsp by hand (the driver-offline scenario): the check finds it. */
+  private checkDriver(): MockResponse {
+    if (this.driver.state === 'installing') return ok(this.driver)
+    if (this.scenario === 'driver-offline' && this.downloadFailedOnce) {
+      this.at(0.1, () => (this.driver = { state: 'ok', name: 'winfsp', version: '2.2.26323', min_version: '2.0', error: null }))
+    }
+    return ok(this.driver)
   }
 
   private checkUpdate(): MockResponse {

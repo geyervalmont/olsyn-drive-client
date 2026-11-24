@@ -64,6 +64,26 @@ describe('first-run onboarding', () => {
     await waitFor(() => expect(screen.getByRole('navigation', { name: 'Olsyn Drive' })).toBeTruthy())
   })
 
+  it('links to the WinFsp download page when the download does not work, and checks again', async () => {
+    const { agent, shell } = renderWithAgent(<App surface="main" />, 'driver-offline')
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))
+    await screen.findByText('Your code')
+    await act(async () => agent.tick(8))
+    fireEvent.click(await screen.findByRole('button', { name: 'Add WinFsp' }))
+    const progress = await screen.findByRole('list', { name: 'Adding WinFsp' })
+    expect(within(progress).getByText(/Downloading WinFsp/)).toBeTruthy()
+    await act(async () => agent.tick(1))
+    expect(await screen.findByRole('heading', { name: 'WinFsp could not be downloaded.' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Open the WinFsp download page' }))
+    expect(shell.opened).toContain('https://winfsp.dev/rel/')
+    // The person installs WinFsp by hand, then checks again: setup moves on to the letter.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
+    })
+    await act(async () => agent.tick(1))
+    expect(await screen.findByRole('heading', { name: 'Choose a letter for the drive.' })).toBeTruthy()
+  })
+
   it('offers to try again when the Windows prompt is declined', async () => {
     const { agent } = renderWithAgent(<App surface="main" />, 'driver-declined')
     fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))

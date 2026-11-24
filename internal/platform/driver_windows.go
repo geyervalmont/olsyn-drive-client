@@ -141,9 +141,10 @@ const (
 // InstallDriver runs the WinFsp MSI elevated (one UAC prompt) and waits for it.
 // The installer is first copied into workDir, then the copy must match
 // wantSHA256 and carry a valid Authenticode signature before it is run, so a
-// file swapped after the check is never executed. progress (may be nil)
-// hears the DriverStep values as they begin. A declined prompt is
-// ErrDeclined; an install that needs Windows restarted is ErrRestartNeeded.
+// file swapped after the check is never executed; a file that fails either
+// check is ErrDriverUnavailable. progress (may be nil) hears the DriverStep
+// values as they begin. A declined prompt is ErrDeclined; an install that
+// needs Windows restarted is ErrRestartNeeded.
 func InstallDriver(ctx context.Context, installer, wantSHA256, workDir string, progress func(step string)) error {
 	if wantSHA256 == "" {
 		return errors.New("installer hash is required")
@@ -154,11 +155,11 @@ func InstallDriver(ctx context.Context, installer, wantSHA256, workDir string, p
 	progress(DriverStepPreparing)
 	staged, err := stageVerified(installer, wantSHA256, workDir)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrDriverUnavailable, err)
 	}
 	defer os.Remove(staged)
 	if err := verifyAuthenticode(staged); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrDriverUnavailable, err)
 	}
 	sysDir, err := windows.GetSystemDirectory()
 	if err != nil {

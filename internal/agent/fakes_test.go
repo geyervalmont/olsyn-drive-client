@@ -275,7 +275,7 @@ type fakeSystem struct {
 	// lettersInUse overrides the default (only D: taken)
 	lettersInUse map[string]string
 	// install runs for InstallDriver; nil declines the prompt.
-	install func(progress func(string)) error
+	install func(progress func(platform.DriverProgress)) error
 }
 
 func (s *fakeSystem) OpenURL(ctx context.Context, u string) error {
@@ -305,7 +305,7 @@ func (s *fakeSystem) DetectDriver() (platform.DriverInfo, error) {
 	return s.driver, nil
 }
 
-func (s *fakeSystem) InstallDriver(ctx context.Context, progress func(string)) error {
+func (s *fakeSystem) InstallDriver(ctx context.Context, progress func(platform.DriverProgress)) error {
 	s.mu.Lock()
 	install := s.install
 	s.mu.Unlock()

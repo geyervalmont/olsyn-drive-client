@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -70,10 +71,11 @@ func newHarness(t *testing.T, prepare func(h *harness)) *harness {
 	a, err := New(Options{
 		Version: "1.0.0", Platform: "windows-x64", Paths: h.paths, Listener: l,
 		DriveFor: func(string) Drive { return h.drive }, FS: h.fs, Mounter: h.mounter, Creds: store, System: h.system,
-		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-		DeviceName:        "TEST-PC",
-		HeartbeatInterval: 30 * time.Millisecond,
-		MinLinkInterval:   time.Millisecond,
+		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DeviceName:         "TEST-PC",
+		HeartbeatInterval:  30 * time.Millisecond,
+		MinLinkInterval:    time.Millisecond,
+		DriverDownloadPage: "https://winfsp.example.test/rel/",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -714,11 +716,12 @@ func TestDriverInstallProgressThenRestartNeeded(t *testing.T) {
 	h := newHarness(t, func(h *harness) {
 		seedAccount(h)
 		h.system.driver = platform.DriverInfo{Name: "winfsp", Needed: true, Others: []string{"dokany"}}
-		h.system.install = func(progress func(string)) error {
-			progress(platform.DriverStepPreparing)
-			progress(platform.DriverStepApproval)
+		h.system.install = func(progress func(platform.DriverProgress)) error {
+			progress(platform.DriverProgress{Step: platform.DriverStepDownloading, Done: 1 << 20, Total: 2 << 20})
+			progress(platform.DriverProgress{Step: platform.DriverStepPreparing})
+			progress(platform.DriverProgress{Step: platform.DriverStepApproval})
 			<-release
-			progress(platform.DriverStepInstalling)
+			progress(platform.DriverProgress{Step: platform.DriverStepInstalling})
 			h.system.mu.Lock()
 			h.system.driver = platform.DriverInfo{Name: "winfsp", Needed: true, Installed: true, Version: "2.2.26323"}
 			h.system.mu.Unlock()
@@ -749,6 +752,57 @@ func TestDriverInstallProgressThenRestartNeeded(t *testing.T) {
 	}
 	if err := h.post("/v1/driver/install", nil, nil); !errors.As(err, &ae) || ae.Code != "driver_restart_needed" {
 		t.Fatalf("install again: %v", err)
+	}
+}
+
+// A download that fails (offline, blocked, or a file that is not the pinned
+// one) leaves the driver missing with "download_failed" and the publisher's
+// download page; after the person installs WinFsp by hand, "check again"
+// finds it.
+func TestDriverDownloadFailedThenInstalledByHand(t *testing.T) {
+	h := newHarness(t, func(h *harness) {
+		seedAccount(h)
+		h.system.driver = platform.DriverInfo{Name: "winfsp", Needed: true}
+		h.system.install = func(progress func(platform.DriverProgress)) error {
+			progress(platform.DriverProgress{Step: platform.DriverStepDownloading, Done: 0, Total: 2 << 20})
+			return fmt.Errorf("%w: download: dial tcp: no route to host", platform.ErrDriverUnavailable)
+		}
+	})
+	h.waitState("driver missing", func(s State) bool { return s.Driver.State == "missing" && s.Ready })
+	var d Driver
+	if err := h.post("/v1/driver/install", nil, &d); err != nil {
+		t.Fatal(err)
+	}
+	if d.State != "installing" || d.Progress != platform.DriverStepDownloading {
+		t.Fatalf("install answer %+v", d)
+	}
+	s := h.waitState("download failed", func(s State) bool { return s.Driver.Error != nil })
+	if s.Driver.State != "missing" || s.Driver.Error.Code != "download_failed" || s.Driver.Download != nil {
+		t.Fatalf("driver = %+v", s.Driver)
+	}
+	if s.Driver.DownloadPage != "https://winfsp.example.test/rel/" {
+		t.Fatalf("download page %q", s.Driver.DownloadPage)
+	}
+	if !slices.ContainsFunc(s.Issues, func(i Issue) bool {
+		return i.Code == "driver_missing" && i.Action == "check_driver" && strings.Contains(i.Message, s.Driver.DownloadPage)
+	}) {
+		t.Fatalf("issues = %+v", s.Issues)
+	}
+	// Check again before installing by hand: still missing, same advice.
+	if err := h.post("/v1/driver/check", nil, &d); err != nil {
+		t.Fatal(err)
+	}
+	if d.State != "missing" || d.Error == nil || d.Error.Code != "download_failed" {
+		t.Fatalf("check before install: %+v", d)
+	}
+	h.system.mu.Lock()
+	h.system.driver = platform.DriverInfo{Name: "winfsp", Needed: true, Installed: true, Version: "2.2.26323"}
+	h.system.mu.Unlock()
+	if err := h.post("/v1/driver/check", nil, &d); err != nil {
+		t.Fatal(err)
+	}
+	if d.State != "ok" || d.Error != nil {
+		t.Fatalf("check after install: %+v", d)
 	}
 }
 

@@ -119,7 +119,8 @@ other keys are extra detail named per code below.
   `signed_out` (the person signed out), `token_revoked` ("Signed out by the drive": device removed in the web
   app), `token_missing` (credential store lost it), `link_denied`, `link_expired`, `network`, `server_restarting`.
 - `issues`: what makes the state `attention`; always an array. Codes and the `action` the UI offers:
-  `held_files` (`show_held`), `mount_failed` (`mount`), `driver_missing` / `driver_outdated` (`install_driver`),
+  `held_files` (`show_held`), `mount_failed` (`mount`), `driver_missing` / `driver_outdated` (`install_driver`; `check_driver`
+  after a failed download, which `POST /v1/driver/check` answers),
   `update_required` (`apply_update`), `update_failed` (`check_update`), `cache_full` (`show_settings`),
   `credential_store` (`sign_in`).
 - `ready`: false until start-up has finished (sign-in state loaded and, when the drive was mounted before,
@@ -235,18 +236,21 @@ empty, so the UI can say "Uploading 105 of 120"; 0 when idle.
 
 ```json
 {"state": "installing", "name": "winfsp", "version": null, "min_version": "2.0", "error": null,
- "progress": "approval", "others": ["dokany"]}
+ "progress": "downloading", "download": {"bytes_done": 1048576, "bytes_total": 2220032},
+ "download_page": "https://winfsp.dev/rel/", "others": ["dokany"]}
 ```
 
 `state`: `ok` | `missing` | `outdated` | `installing` | `restart_needed` (installed, but Windows must sign
 out and in, or restart, before it loads; the mount waits, 409 `driver_restart_needed`) | `not_needed` (this OS needs
 no driver yet) | `unknown`. `min_version` is this build's minimum (WinFsp 2.0) or a release manifest's, whichever is
 newer; an installed WinFsp at least that new is used as it is and never reinstalled.
-`progress` (only while `installing`): `preparing` (extracting and checking the installer) → `approval` (the
-Windows administrator prompt is up) → `installing`. `others`: other file system providers found in Windows'
+`progress` (only while `installing`): `downloading` (WinFsp's installer from the WinFsp project's release; `download`
+is a `Progress`) → `preparing` (checking its hash and signature) → `approval` (the Windows administrator prompt is
+up) → `installing`. `download_page` (where a driver is needed): WinFsp's own download page, for installing it by hand. `others`: other file system providers found in Windows'
 network provider order (`dokany`); they coexist with WinFsp and are only reported.
-`error.code` after an install: `declined` (the prompt was refused; state stays `missing`), `install_failed`,
-`restart_needed`.
+`error.code` after an install: `declined` (the prompt was refused; state stays `missing`), `download_failed` (offline,
+the download blocked, or a file that failed its size, hash or signature check: nothing ran; the UI offers
+`download_page` and "Check again"), `install_failed`, `restart_needed`.
 
 ### Settings
 
@@ -420,12 +424,15 @@ the new version starts and must answer `GET /v1/state` with the new `version`, `
 mounted, `mount.state: mounted` within 60 s; otherwise the old version is put back and started, and its
 `update.state` is `failed` with code `rolled_back`. The UI simply reconnects (a new `agent_run`).
 
-`POST /v1/driver/install` → 202 `Driver` (state `installing`, `progress` `preparing`). Extracts the WinFsp MSI
-embedded in the program to a new temporary folder, checks its SHA-256 against the pinned value and its Authenticode
-signature, and runs `msiexec` through ShellExecute `runas` (one UAC prompt). Progress and the outcome come as
+`POST /v1/driver/install` → 202 `Driver` (state `installing`, `progress` `downloading`). Downloads the official WinFsp
+MSI from the WinFsp project's GitHub release to a new temporary folder (the program does not carry it), checks its
+size and SHA-256 against the pinned values and its Authenticode signature, and runs `msiexec` through ShellExecute
+`runas` (one UAC prompt). Progress and the outcome come as
 `state` events: `driver.state` `ok`; `missing` with `error` `declined` when the person said no;
 `restart_needed` when the installer asks for a restart (MSI 3010). 409 `not_supported` off Windows,
 `driver_restart_needed` while a restart is pending.
+`POST /v1/driver/check` → 200 `Driver`: detects the driver again (after the person installed WinFsp by hand); a
+driver now found clears the error and, if the drive was meant to be connected, mounts it. Agents before 1.3 answer 404.
 
 ### Other
 

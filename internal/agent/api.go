@@ -215,8 +215,14 @@ type Driver struct {
 	MinVersion string   `json:"min_version"`
 	Error      *Problem `json:"error"`
 	// Progress is the install step while State is "installing":
-	// preparing, approval (the administrator prompt is up) or installing.
+	// downloading, preparing, approval (the administrator prompt is up) or
+	// installing.
 	Progress string `json:"progress,omitempty"`
+	// Download is the installer's download while Progress is "downloading".
+	Download *Progress `json:"download,omitempty"`
+	// DownloadPage is the driver publisher's download page, for installing
+	// it by hand when the download from here does not work.
+	DownloadPage string `json:"download_page,omitempty"`
 	// Others names other file system providers found (e.g. "dokany");
 	// they coexist and are only reported.
 	Others []string `json:"others,omitempty"`

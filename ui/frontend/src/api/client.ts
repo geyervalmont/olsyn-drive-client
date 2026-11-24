@@ -165,6 +165,10 @@ export class AgentClient {
   installDriver() {
     return this.call<Driver>('POST', '/v1/driver/install', {})
   }
+  /** Detects the driver again, after the person installed WinFsp by hand; null from an agent before 1.3. */
+  async checkDriver(): Promise<Driver | null> {
+    return this.optional(() => this.call<Driver>('POST', '/v1/driver/check', {}))
+  }
 
   // Other
   diagnostics() {

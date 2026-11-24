@@ -13,9 +13,10 @@ nice, be dynamic, proper ui/ux".
 
 It is open source under the Apache License 2.0 (the product owner's choice, 2026-11-24) so that it can use
 WinFsp under WinFsp's FLOSS exception. Consequences: this repository holds nothing proprietary, no secrets, no
-customer names, no internal host names; the Windows program is this code plus the unmodified WinFsp installer
-embedded in it (GPLv3 with the FLOSS exception, source at the WinFsp project's v2.2 tag); the About screen,
-`olsyn-drive licences`, NOTICE and the README carry the WinFsp notice. `relay/` is this project's own earlier
+customer names, no internal host names; the Windows program is this code only: it does not carry WinFsp, it links
+to it and downloads WinFsp's own installer from the WinFsp project when needed (GPLv3 with the FLOSS exception,
+source at the WinFsp project's v2.2 tag); the About screen, `olsyn-drive licences`, NOTICE and the README carry
+the WinFsp notice. `relay/` is this project's own earlier
 relay client, kept for reference as a separate module; it is not built into the program.
 
 ## Decided by measurement (spike, 2026-11-24, Windows 11 build 26300, WinFsp 2.2)
@@ -117,13 +118,29 @@ cleanly (drive disconnected, queue kept on disk), the tray app is stopped, the f
 started; unsent files carry on. The same or an older exe just opens the installed copy. Dev builds do the
 same, replacing the installed copy whenever the files differ.
 
-The single elevated step is the WinFsp driver. Its unmodified MSI (2.2, pinned by size and SHA-256 in
-`internal/winfspmsi`, fetched by `make winfsp-msi`, never committed) is embedded in the exe. First run detects
-WinFsp (an installed one at least as new as required is used as it is; a Dokany network provider is noted and
-left alone), explains it in one sentence and, when needed, extracts the MSI to a temporary folder, checks its
-hash and Authenticode signature, and runs it with one UAC prompt, showing each step. A declined prompt can be
-tried again; an install that needs Windows to sign out and in says so and setup finishes after it. IT can
-pre-install WinFsp instead. Binaries are signed; an unsigned build is for testing only.
+The single elevated step is the WinFsp driver. The program does not carry it (2026-11-24: an unsigned dev build
+that carried the MSI was flagged by Microsoft Defender's machine-learning heuristic; whatever the cause, a smaller
+program that only links to WinFsp is the honest shape). First run detects WinFsp (an installed one at least as new
+as required is used as it is; a Dokany network provider is noted and left alone), explains it in one sentence and,
+when needed, downloads WinFsp's official MSI from the WinFsp project's GitHub release (2.2, pinned by size and
+SHA-256 in `internal/winfspmsi`) to a temporary folder with progress, checks size, hash and Authenticode signature,
+and runs it with one UAC prompt, showing each step. Offline, blocked, or a file that fails a check: nothing runs,
+and the step shows WinFsp's own download page with "Check again", so the person (or IT) installs WinFsp from its
+signed installer. A declined prompt can be tried again; an install that needs Windows to sign out and in says so
+and setup finishes after it.
+
+Nothing is written at first launch from Downloads before the person answers the install question; self-install
+and start-at-login happen only when they agree. A start-at-login entry that has gone missing is offered again in
+the app, never re-added silently. The program never touches security settings: no exclusions, no attempts to evade
+or disable protection, no packing or obfuscation. When security software removes or blocks it (the agent exe
+missing, refused at start, or stopped repeatedly) the app and CLI say so in plain words and link to
+`docs/pre-release-windows.md`; the data folder (`%LOCALAPPDATA%\Olsyn Drive`, journal and cache) is untouched, so
+after a reinstall queued uploads carry on, and the installer, finding the data without the program, says it is
+reinstalling and keeping the waiting files.
+
+Release binaries are signed; until then an unsigned pre-release goes only to people who knowingly add a Defender
+exclusion for the program folder by hand (docs/pre-release-windows.md); false positives are reported to Microsoft
+(docs/false-positive-submission.md).
 
 ## Interface
 

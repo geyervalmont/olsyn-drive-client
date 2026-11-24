@@ -33,6 +33,11 @@ var (
 	// ErrRestartNeeded means the driver installed but Windows must restart
 	// (or the person sign out and in) before it can be used.
 	ErrRestartNeeded = errors.New("the driver is installed but needs a restart of Windows")
+	// ErrDriverUnavailable means the driver installer could not be
+	// downloaded, or the file did not pass its checks (size, SHA-256,
+	// Authenticode signature), so it was not run. The person can install the
+	// driver from its publisher's download page instead.
+	ErrDriverUnavailable = errors.New("the driver installer could not be downloaded and checked")
 )
 
 // Paths are the per-user folders the client uses.
@@ -108,12 +113,21 @@ type DriverInfo struct {
 	Others []string
 }
 
-// Steps InstallDriver reports through its progress callback, in order.
+// Steps a driver install reports through its progress callback, in order.
 const (
-	DriverStepPreparing  = "preparing"  // extracting and checking the installer
-	DriverStepApproval   = "approval"   // the administrator prompt is up
-	DriverStepInstalling = "installing" // the installer is running
+	DriverStepDownloading = "downloading" // the installer is downloaded from its publisher
+	DriverStepPreparing   = "preparing"   // checking the installer (hash, signature)
+	DriverStepApproval    = "approval"    // the administrator prompt is up
+	DriverStepInstalling  = "installing"  // the installer is running
 )
+
+// DriverProgress is one progress report of a driver install: the step, and
+// while downloading the bytes done of the total.
+type DriverProgress struct {
+	Step  string
+	Done  int64
+	Total int64
+}
 
 // UninstallEntry is what the OS's "installed apps" list shows.
 type UninstallEntry struct {

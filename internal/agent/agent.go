@@ -70,6 +70,9 @@ type Options struct {
 	// DriverMinVersion is the oldest installed driver this build works
 	// with; a release manifest may ask for a newer one.
 	DriverMinVersion string
+	// DriverDownloadPage is the driver publisher's download page, shown
+	// when the driver is needed.
+	DriverDownloadPage string
 }
 
 // Agent is the daemon. Create it with New and start it with Run.
@@ -397,11 +400,24 @@ func (a *Agent) issuesLocked(fs FSStatus) []Issue {
 		}
 		issues = append(issues, Issue{"mount_failed", msg, "mount"})
 	}
+	downloadFailed := a.driver.Error != nil && a.driver.Error.Code == "download_failed"
+	switch {
+	case downloadFailed && (a.driver.State == "missing" || a.driver.State == "outdated"):
+		msg := "WinFsp could not be downloaded on this PC. Install it from its download page, then check again."
+		if a.driver.DownloadPage != "" {
+			msg = "WinFsp could not be downloaded on this PC. Install it from " + a.driver.DownloadPage + ", then check again."
+		}
+		issues = append(issues, Issue{"driver_" + a.driver.State, msg, "check_driver"})
+	}
 	switch a.driver.State {
 	case "missing":
-		issues = append(issues, Issue{"driver_missing", "The WinFsp driver is needed to show the drive. It installs with one administrator prompt.", "install_driver"})
+		if !downloadFailed {
+			issues = append(issues, Issue{"driver_missing", "The WinFsp driver is needed to show the drive. It installs with one administrator prompt.", "install_driver"})
+		}
 	case "outdated":
-		issues = append(issues, Issue{"driver_outdated", "A newer WinFsp driver is needed.", "install_driver"})
+		if !downloadFailed {
+			issues = append(issues, Issue{"driver_outdated", "A newer WinFsp driver is needed.", "install_driver"})
+		}
 	case "restart_needed":
 		issues = append(issues, Issue{"driver_restart_needed", "WinFsp is installed. Sign out of Windows and back in (or restart) to finish, then the drive connects.", ""})
 	}
@@ -595,6 +611,9 @@ const restartNeededMessage = "WinFsp is installed. Sign out of Windows and back 
 func (a *Agent) refreshDriverLocked() {
 	info, err := a.opts.System.DetectDriver()
 	d := Driver{Name: info.Name, Version: info.Version, MinVersion: a.driver.MinVersion, Others: info.Others}
+	if info.Needed {
+		d.DownloadPage = a.opts.DriverDownloadPage
+	}
 	switch {
 	case err != nil:
 		d.State = "unknown"
@@ -610,7 +629,7 @@ func (a *Agent) refreshDriverLocked() {
 	}
 	switch {
 	case a.driver.State == "installing" && d.State != "ok":
-		d.State, d.Progress = "installing", a.driver.Progress
+		d.State, d.Progress, d.Download = "installing", a.driver.Progress, a.driver.Download
 	case a.driverRestart && (d.State == "ok" || d.State == "outdated"):
 		// Installed, but Windows has not loaded it yet: until this agent
 		// restarts (it starts again at the next sign-in) it is not usable.

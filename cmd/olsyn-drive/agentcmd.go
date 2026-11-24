@@ -118,17 +118,18 @@ func cmdAgent(e *env, args []string) int {
 		return exitError
 	}
 	opts := agent.Options{
-		DriverMinVersion: winfspmsi.MinVersion,
-		Version:          version,
-		Paths:            e.paths,
-		Listener:         l,
-		Server:           server,
-		DriveFor:         newDriveFor(hc, log),
-		FS:               coreFS,
-		Mounter:          newMounter(coreFS, log),
-		Creds:            creds,
-		System:           osSystem{exe: exe, paths: e.paths},
-		Logger:           log,
+		DriverMinVersion:   winfspmsi.MinVersion,
+		DriverDownloadPage: winfspmsi.DownloadPage,
+		Version:            version,
+		Paths:              e.paths,
+		Listener:           l,
+		Server:             server,
+		DriveFor:           newDriveFor(hc, log),
+		FS:                 coreFS,
+		Mounter:            newMounter(coreFS, log),
+		Creds:              creds,
+		System:             osSystem{exe: exe, paths: e.paths},
+		Logger:             log,
 		OnReady: func() {
 			cleanupAfterUpdate(e.ctx, log, exe)
 		},

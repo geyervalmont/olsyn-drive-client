@@ -22,6 +22,7 @@ export type IssueAction =
   | 'show_held'
   | 'mount'
   | 'install_driver'
+  | 'check_driver'
   | 'apply_update'
   | 'check_update'
   | 'show_settings'
@@ -108,8 +109,8 @@ export interface Update {
 
 export type DriverState = 'ok' | 'missing' | 'outdated' | 'installing' | 'restart_needed' | 'not_needed' | 'unknown'
 
-/** While installing: checking the installer, the Windows prompt is up, the installer runs. */
-export type DriverProgress = 'preparing' | 'approval' | 'installing'
+/** While installing: downloading WinFsp's installer from its publisher, checking it, the Windows prompt is up, the installer runs. */
+export type DriverProgress = 'downloading' | 'preparing' | 'approval' | 'installing'
 
 export interface Driver {
   state: DriverState
@@ -118,6 +119,10 @@ export interface Driver {
   min_version: string | null
   error?: CodeMessage | null
   progress?: DriverProgress
+  /** The installer's download while progress is "downloading". */
+  download?: { bytes_done: number; bytes_total: number } | null
+  /** WinFsp's own download page, for installing it by hand when the download from here does not work. */
+  download_page?: string
   /** Other file system providers found (e.g. "dokany"); they coexist. */
   others?: string[]
 }

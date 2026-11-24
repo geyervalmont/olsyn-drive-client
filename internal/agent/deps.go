@@ -211,9 +211,12 @@ type System interface {
 	OpenFolder(ctx context.Context, path string) error
 	SetAutostart(enabled bool) error
 	DetectDriver() (platform.DriverInfo, error)
-	// InstallDriver runs the bundled, verified driver installer elevated.
-	// progress hears the platform.DriverStep values as they begin.
-	InstallDriver(ctx context.Context, progress func(step string)) error
+	// InstallDriver downloads the driver's installer from its publisher,
+	// verifies it and runs it elevated. progress hears each
+	// platform.DriverStep as it begins, and the bytes while downloading. A
+	// download that fails or does not pass its checks is
+	// platform.ErrDriverUnavailable.
+	InstallDriver(ctx context.Context, progress func(platform.DriverProgress)) error
 	// DriveLettersInUse maps the letters D: to Z: something holds to what
 	// (platform.LetterVolume, LetterNetwork, LetterSubst); nil where the OS
 	// has no drive letters.

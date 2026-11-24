@@ -3,16 +3,19 @@ Copyright 2026 The Olsyn Drive authors
 
 Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-The Windows program carries, unmodified, the installer of WinFsp, which it
-runs with the person's approval to install the WinFsp driver. WinFsp is not
-linked into the program:
+On Windows the program uses WinFsp. It does not carry WinFsp and WinFsp is
+not linked into it: when WinFsp is missing, the program downloads WinFsp's
+own installer (winfsp-2.2.26323.msi) from the WinFsp project's GitHub
+release, checks its size, SHA-256 and signature, and runs it with the
+person's approval. A person may instead install WinFsp from its own
+download page (https://winfsp.dev/rel/).
 
     WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos
     https://github.com/winfsp/winfsp
 
 WinFsp is licensed under the GPLv3 with the WinFsp FLOSS exception
 (https://github.com/winfsp/winfsp/blob/v2.2/License.txt). The complete
-source code of the release included (2.2.26323) is at
+source code of that release (2.2.26323) is at
 https://github.com/winfsp/winfsp/tree/v2.2.
 
 The notices of the open-source components linked into the program are in

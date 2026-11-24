@@ -93,6 +93,8 @@ function issueBanner(issue: Issue, client: ReturnType<typeof useAgentContext>['c
       return { ...base, icon: 'hold', body: 'They are kept on this PC, not on the drive. Choose what to do with each one.', action: { label: 'Show files', run: () => navigate('transfers/held') } }
     case 'install_driver':
       return { ...base, icon: 'shield', body: 'Windows will ask for permission once.', action: { label: 'Install', run: () => client.installDriver() } }
+    case 'check_driver':
+      return { ...base, icon: 'shield', action: { label: 'Check again', run: () => client.checkDriver() } }
     case 'mount':
       return { ...base, icon: 'drive', action: { label: 'Connect again', run: () => client.mount() } }
     case 'apply_update':

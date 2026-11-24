@@ -14,6 +14,7 @@ export const scenarios = {
   'driver-missing': 'Signed in, but the file system driver is missing.',
   'driver-restart': 'A new PC where adding WinFsp needs Windows to sign out and back in before the drive can appear.',
   'driver-declined': 'A new PC where the Windows prompt is declined the first time, then accepted.',
+  'driver-offline': 'A new PC where WinFsp cannot be downloaded (offline or blocked); the person installs it by hand and checks again.',
   'signed-out': 'Signed out by the drive (this PC was removed in the web app).',
   'big-list': '12,000 files waiting while paused, to check the list stays smooth.',
   empty: 'Connected with nothing moving and no history.',

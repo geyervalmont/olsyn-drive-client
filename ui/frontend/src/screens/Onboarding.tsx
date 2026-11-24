@@ -3,7 +3,7 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type { DriverProgress, SettingsResponse } from '../api/types'
-import { formatCountdown, secondsUntil } from '../lib/format'
+import { formatCountdown, formatProgress, secondsUntil } from '../lib/format'
 import { useNow } from '../lib/useNow'
 import { errorText, useAction, useAgentContext, useAgentView } from '../state/context'
 import { cacheExplainer } from '../state/derive'
@@ -264,14 +264,18 @@ function SignInOutcome({ state, message, onRetry, pending, onBack }: { state: st
 }
 
 const DRIVER_STEPS: { key: DriverProgress; label: string }[] = [
+  { key: 'downloading', label: 'Downloading WinFsp from the WinFsp project' },
   { key: 'preparing', label: 'Checking the installer' },
   { key: 'approval', label: 'Waiting for you to choose Yes in the Windows prompt' },
   { key: 'installing', label: 'Adding WinFsp' },
 ]
 
+/** WinFsp's download page, when an older agent does not send it. */
+const WINFSP_DOWNLOAD_PAGE = 'https://winfsp.dev/rel/'
+
 function DriverStep({ onLater }: { onLater: () => void }) {
   const view = useAgentView()
-  const { client } = useAgentContext()
+  const { client, shell } = useAgentContext()
   const driver = view.state?.driver
   const { pending, error, run } = useAction()
   const installing = driver?.state === 'installing' || pending === 'install'
@@ -299,9 +303,47 @@ function DriverStep({ onLater }: { onLater: () => void }) {
     )
   }
 
+  const downloadFailed = driver?.error?.code === 'download_failed' && !installing
+  if (downloadFailed) {
+    const page = driver?.download_page || WINFSP_DOWNLOAD_PAGE
+    return (
+      <section className="onb-step" aria-labelledby="onboarding-title">
+        <span className="onb-icon" aria-hidden="true">
+          <Icon name="shield" size={26} />
+        </span>
+        <h1 id="onboarding-title" className="onb-title display">
+          WinFsp could not be downloaded.
+        </h1>
+        <p className="onb-lead">This PC could not get WinFsp from the WinFsp project (no connection, or the download is blocked), so nothing was installed. You can install it yourself from its own signed installer, then come back here.</p>
+        <div className="onb-expect">
+          <Icon name="info" size={17} />
+          <p>
+            On the WinFsp download page, get the installer, run it and choose Yes when Windows asks. Then choose Check again.{' '}
+            <button type="button" className="link-btn" onClick={() => shell.openUrl(page)}>
+              {page}
+            </button>
+          </p>
+        </div>
+        {error && <InlineError message={error.message} />}
+        <div className="onb-actions">
+          <Button variant="primary" size="l" pending={pending === 'check'} onClick={() => void run('check', () => client.checkDriver())} data-autofocus>
+            Check again
+          </Button>
+          <Button variant="secondary" size="l" onClick={() => shell.openUrl(page)}>
+            Open the WinFsp download page
+          </Button>
+          <Button variant="ghost" size="l" pending={pending === 'install'} onClick={() => void run('install', () => client.installDriver())}>
+            Try the download again
+          </Button>
+        </div>
+      </section>
+    )
+  }
+
   const declined = driver?.error?.code === 'declined'
   const failed = driver?.error && !declined ? driver.error.message : null
-  const current = installing ? DRIVER_STEPS.findIndex((s) => s.key === (driver?.progress ?? 'preparing')) : -1
+  const current = installing ? DRIVER_STEPS.findIndex((s) => s.key === (driver?.progress ?? 'downloading')) : -1
+  const download = driver?.progress === 'downloading' ? driver.download : null
   return (
     <section className="onb-step" aria-labelledby="onboarding-title">
       <span className="onb-icon" aria-hidden="true">
@@ -310,7 +352,7 @@ function DriverStep({ onLater }: { onLater: () => void }) {
       <h1 id="onboarding-title" className="onb-title display">
         One Windows component to add.
       </h1>
-      <p className="onb-lead">Olsyn Drive uses WinFsp, a free and widely used Windows component, to show the drive as a letter in File Explorer. It comes with Olsyn Drive, so nothing is downloaded.</p>
+      <p className="onb-lead">Olsyn Drive uses WinFsp, a free and widely used Windows component, to show the drive as a letter in File Explorer. Olsyn Drive downloads WinFsp's own signed installer (about 2 MB) from the WinFsp project and checks it before it runs.</p>
       {!installing && (
         <div className="onb-expect">
           <Icon name="info" size={17} />
@@ -327,6 +369,9 @@ function DriverStep({ onLater }: { onLater: () => void }) {
                 </span>
                 {s.label}
                 {s.key === 'approval' && i === current && <span className="onb-fine"> The prompt may be behind this window.</span>}
+                {s.key === 'downloading' && i === current && download && download.bytes_total > 0 && (
+                  <span className="onb-fine"> {formatProgress(download.bytes_done, download.bytes_total)}</span>
+                )}
               </li>
             ))}
           </ol>

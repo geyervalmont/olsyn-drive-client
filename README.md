@@ -48,12 +48,14 @@ While builds are unsigned, a person sees this:
 
 ## Build
 
-    make        # dist/windows-amd64/olsyn-drive.exe (needs Go, Node and the gh CLI)
+    make        # dist/windows-amd64/olsyn-drive.exe (needs Go and Node)
     make dev    # development build plus a fake drive server for testing
     make test
 
-The Windows builds embed the unmodified WinFsp installer; `make winfsp-msi` (run by `make`) downloads it from
-the WinFsp project's v2.2 release with `gh` into `build/` and checks its size and SHA-256. It is never committed.
+The program does not carry WinFsp. When the driver is missing, its driver step downloads WinFsp's own installer from
+the WinFsp project's v2.2 GitHub release, checks its size, SHA-256 (pinned in `internal/winfspmsi`) and Authenticode
+signature, and runs it with one administrator prompt. Offline, or where the download is blocked, it links to WinFsp's
+download page instead, so the person (or IT) can install WinFsp from its own signed installer.
 
 `relay/` holds this project's own earlier relay client (a separate Go module under the same licence), kept for
 reference; it is not part of the program.
@@ -62,9 +64,9 @@ reference; it is not part of the program.
 
 Apache-2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
-On Windows the drive letter is provided by WinFsp. The Windows program carries WinFsp's installer, unmodified,
-and runs it once with the person's approval:
+On Windows the drive letter is provided by WinFsp. The program does not carry WinFsp; it links to it, and
+downloads WinFsp's own installer from the WinFsp project when the person agrees to install it:
 WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos, https://github.com/winfsp/winfsp.
-WinFsp is licensed under the GPLv3 with the WinFsp FLOSS exception; the source of the included release is at
+WinFsp is licensed under the GPLv3 with the WinFsp FLOSS exception; the source of the release it installs is at
 https://github.com/winfsp/winfsp/tree/v2.2. `olsyn-drive licences` and the About screen list every open-source
 component linked into the program, with its licence.
