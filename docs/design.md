@@ -11,10 +11,12 @@ and shows what it is doing. The product owner: "The drive executable for users s
 manage the mount, authentication, make it easy. Auto update etc", and "make it really good, i want it to look
 nice, be dynamic, proper ui/ux".
 
-It is open source (the product owner's choice, 2026-11-24) so that it can use WinFsp under WinFsp's free licence.
-Consequences: this repository holds nothing proprietary, no secrets, no customer names, no internal host
-names; the installer ships only this program and the unmodified WinFsp installer; the About screen and the
-README carry the WinFsp notice (see NOTICE).
+It is open source under the Apache License 2.0 (the product owner's choice, 2026-11-24) so that it can use
+WinFsp under WinFsp's FLOSS exception. Consequences: this repository holds nothing proprietary, no secrets, no
+customer names, no internal host names; the Windows program is this code plus the unmodified WinFsp installer
+embedded in it (GPLv3 with the FLOSS exception, source at the WinFsp project's v2.2 tag); the About screen,
+`olsyn-drive licences`, NOTICE and the README carry the WinFsp notice. `relay/` is this project's own earlier
+relay client, kept for reference as a separate module; it is not built into the program.
 
 ## Decided by measurement (spike, 2026-11-24, Windows 11 build 26300, WinFsp 2.2)
 

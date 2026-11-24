@@ -1,0 +1,54 @@
+# Vet and tests on Linux, and the Windows builds (cross-compiled, with the
+# WinFsp installer embedded). Actions are pinned by commit SHA.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/frontend/package-lock.json
+      - name: Front end
+        run: make frontend
+      - name: Vet (windows/amd64, windows/arm64, darwin/arm64, linux/amd64)
+        run: make vet
+      - name: Tests
+        run: make test
+
+  windows-build:
+    runs-on: ubuntu-latest
+    needs: test
+    env:
+      CGO_ENABLED: "0"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/frontend/package-lock.json
+      - name: Windows builds (amd64, arm64) and dev builds
+        run: make windows windows-arm64 dev
+      - name: Sizes
+        run: ls -l dist/windows-amd64 dist/windows-arm64 dist/windows-amd64/dev

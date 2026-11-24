@@ -1,0 +1,20 @@
+Olsyn Drive desktop client
+Copyright 2026 The Olsyn Drive authors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The Windows program carries, unmodified, the installer of WinFsp, which it
+runs with the person's approval to install the WinFsp driver. WinFsp is not
+linked into the program:
+
+    WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos
+    https://github.com/winfsp/winfsp
+
+WinFsp is licensed under the GPLv3 with the WinFsp FLOSS exception
+(https://github.com/winfsp/winfsp/blob/v2.2/License.txt). The complete
+source code of the release included (2.2.26323) is at
+https://github.com/winfsp/winfsp/tree/v2.2.
+
+The notices of the open-source components linked into the program are in
+internal/notices/NOTICE.txt; the program shows them with
+"olsyn-drive licences" and on its About screen.

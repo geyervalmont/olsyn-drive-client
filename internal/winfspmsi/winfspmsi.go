@@ -13,6 +13,10 @@ const (
 	Version = "2.2.26323"
 	// File is the release asset name.
 	File = "winfsp-" + Version + ".msi"
+	// ReleaseTag is the WinFsp project's release the installer comes from;
+	// SourceURL is that release's complete source code.
+	ReleaseTag = "v2.2"
+	SourceURL  = "https://github.com/winfsp/winfsp/tree/" + ReleaseTag
 	// SHA256 pins the release asset (checked when it is fetched, and again
 	// before it is run elevated).
 	SHA256 = "36ce01f9eedbbe6842b7fb4bedc79d7d4f71983e8aceb6877b46a07b331c7e19"
