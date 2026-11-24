@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -81,6 +82,14 @@ var ErrNameTaken = errors.New("index: name already used")
 // DB is the index.
 type DB struct {
 	db *bolt.DB
+	// updates and views count transactions, for tests that bound them.
+	updates, views atomic.Uint64
+}
+
+// TxCounts reports how many read-write and read-only transactions ran
+// since Open.
+func (d *DB) TxCounts() (updates, views uint64) {
+	return d.updates.Load(), d.views.Load()
 }
 
 // Open opens (or creates) the index at path.
@@ -182,11 +191,13 @@ type Tx struct{ tx *bolt.Tx }
 
 // Update runs fn in one atomic, durable transaction.
 func (d *DB) Update(fn func(tx *Tx) error) error {
+	d.updates.Add(1)
 	return d.db.Update(func(btx *bolt.Tx) error { return fn(&Tx{btx}) })
 }
 
 // View runs fn in a read-only transaction.
 func (d *DB) View(fn func(tx *Tx) error) error {
+	d.views.Add(1)
 	return d.db.View(func(btx *bolt.Tx) error { return fn(&Tx{btx}) })
 }
 

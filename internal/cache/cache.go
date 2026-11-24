@@ -30,6 +30,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -93,13 +94,14 @@ type Cache struct {
 	db      *bolt.DB
 	log     *slog.Logger
 
-	mu      sync.Mutex
-	entries map[string]*entry
-	orphans map[string]bool // data files no entry owns (since Open)
-	used    int64
-	changed chan struct{}     // closed and replaced when space is freed
-	metaQ   map[string][]byte // metadata not yet written (nil value: delete)
-	metaSeq uint64            // bumped by every queued metadata change
+	mu         sync.Mutex
+	entries    map[string]*entry
+	orphans    map[string]bool // data files no entry owns (since Open)
+	used       int64
+	changed    chan struct{}     // closed and replaced when space is freed
+	metaWrites atomic.Uint64     // metadata transactions, for Stats
+	metaQ      map[string][]byte // metadata not yet written (nil value: delete)
+	metaSeq    uint64            // bumped by every queued metadata change
 
 	// metaWriteMu serialises metadata commits; metaDone is the last
 	// metaSeq known written.
@@ -746,6 +748,7 @@ func (c *Cache) waitMeta(seq uint64) error {
 	c.metaQ = map[string][]byte{}
 	c.mu.Unlock()
 	if len(q) > 0 {
+		c.metaWrites.Add(1)
 		err := c.db.Update(func(tx *bolt.Tx) error {
 			b := tx.Bucket(bEntries)
 			for k, v := range q {
@@ -944,13 +947,15 @@ type Stats struct {
 	Unsent  int64 // bytes of dirty entries
 	Cap     int64
 	Entries int
+	// MetaWrites counts metadata transactions since Open.
+	MetaWrites uint64
 }
 
 // Stats returns current use.
 func (c *Cache) Stats() Stats {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	s := Stats{Used: c.used, Cap: c.opts.Cap, Entries: len(c.entries)}
+	s := Stats{Used: c.used, Cap: c.opts.Cap, Entries: len(c.entries), MetaWrites: c.metaWrites.Load()}
 	for _, e := range c.entries {
 		if e.Dirty {
 			s.Unsent += e.bytes
