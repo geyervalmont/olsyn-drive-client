@@ -867,3 +867,29 @@ func TestDriverMissingBlocksMount(t *testing.T) {
 		t.Fatalf("mount without driver: %v", err)
 	}
 }
+
+// Another program holds the letter when the agent starts (a subst from a
+// start-up entry, say): the drive says so, takes nothing, and connects by
+// itself once the letter is free.
+func TestMountRetriesWhenTheLetterFreesUp(t *testing.T) {
+	old := letterRetryInterval
+	letterRetryInterval = 10 * time.Millisecond
+	t.Cleanup(func() { letterRetryInterval = old })
+	h := newHarness(t, func(h *harness) {
+		seedAccount(h)
+		h.system.lettersInUse = map[string]string{"W:": platform.LetterSubst}
+	})
+	s := h.waitState("letter taken", func(s State) bool {
+		return s.Mount.State == MountFailed && s.Mount.Error != nil && s.Mount.Error.Code == "letter_taken"
+	})
+	if !strings.Contains(s.Mount.Error.Message, "W: is already used") {
+		t.Fatalf("message = %q", s.Mount.Error.Message)
+	}
+	time.Sleep(50 * time.Millisecond) // still taken: still waiting, not mounted
+	h.system.mu.Lock()
+	h.system.lettersInUse = map[string]string{"D:": platform.LetterVolume}
+	h.system.mu.Unlock()
+	h.waitState("mounted once the letter is free", func(s State) bool {
+		return s.Mount.State == MountMounted && s.Mount.Letter != nil && *s.Mount.Letter == "W:"
+	})
+}

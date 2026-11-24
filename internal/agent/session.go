@@ -641,6 +641,7 @@ func (a *Agent) doMount(ctx context.Context) {
 		a.mu.Unlock()
 		a.log.Warn("mount: letter taken", "letter", letter, "by", inUse[letter])
 		a.emitState()
+		a.watchLetter(ctx, letter)
 		return
 	}
 	mctx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -659,6 +660,58 @@ func (a *Agent) doMount(ctx context.Context) {
 		a.log.Info("mounted", "letter", letter)
 	}
 	a.emitState()
+}
+
+// letterRetryInterval is how often a taken drive letter is looked at again.
+var letterRetryInterval = 5 * time.Second
+
+// watchLetter waits for a taken letter to become free and then connects the
+// drive by itself: another program holding the letter for a moment at sign-in
+// (a subst from a start-up entry, say) must not leave the drive disconnected
+// until someone acts. It never frees the letter itself. It stops when the
+// person disconnects, picks another letter, or the drive connects another way.
+func (a *Agent) watchLetter(ctx context.Context, letter string) {
+	a.mu.Lock()
+	if a.letterWatch {
+		a.mu.Unlock()
+		return
+	}
+	a.letterWatch = true
+	a.mu.Unlock()
+	go func() {
+		t := time.NewTicker(letterRetryInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				a.mu.Lock()
+				a.letterWatch = false
+				a.mu.Unlock()
+				return
+			case <-t.C:
+			}
+			a.mu.Lock()
+			waiting := a.mountWanted && a.letterConfirmed && a.settings.DriveLetter == letter &&
+				a.mount.State == MountFailed && a.mount.Error != nil && a.mount.Error.Code == "letter_taken"
+			if !waiting {
+				a.letterWatch = false
+				a.mu.Unlock()
+				return
+			}
+			a.mu.Unlock()
+			inUse, err := a.opts.System.DriveLettersInUse()
+			if err != nil || inUse[letter] != "" {
+				continue
+			}
+			a.mu.Lock()
+			a.letterWatch = false
+			a.mount = Mount{State: MountUnmounted, Letter: letterPtr(letter)}
+			a.mu.Unlock()
+			a.log.Info("mount: letter is free again, connecting", "letter", letter)
+			a.doMount(ctx)
+			return
+		}
+	}()
 }
 
 // Unmount disconnects the drive letter.

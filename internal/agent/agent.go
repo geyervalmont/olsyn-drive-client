@@ -102,6 +102,7 @@ type Agent struct {
 	// letterConfirmed: the person chose the drive letter (first run: the
 	// drive stays unmounted until then)
 	letterConfirmed bool
+	letterWatch     bool // a goroutine is waiting for a taken letter to free up
 	paused          bool
 	pausedUntil     *time.Time
 	pauseTimer      *time.Timer

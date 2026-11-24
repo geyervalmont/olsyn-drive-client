@@ -171,3 +171,19 @@ Unit tests against a fake drive server for `vfs`, `index`, `cache`, `journal`, `
 end-to-end suite on a real Windows 11 machine against a local drive: Explorer copy of thousands of small
 files plus a multi-GB file, a server restart mid-copy, a network drop, kill and restart of the agent,
 sign-out, an update and a rollback. Synthetic data only.
+
+## What other programs may rely on (Windows)
+
+Other software on the same PC (a Revit add-in that also wants a library drive letter, say) may read these to
+learn that Olsyn Drive owns the drive letter there. They are a contract: change one only after telling the
+programs that read them.
+
+- Installed: `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\OlsynDrive` exists.
+- Used on this PC (survives sign-out, and security software removing the program): the folder
+  `%LOCALAPPDATA%\Olsyn Drive` exists.
+- Running: the mutex `Local\olsyn-drive-agent-<user SID>` exists.
+- Connected: the drive letter is a network drive whose UNC name is `\\olsyn\drive`.
+
+When either of the first two holds, an absent drive letter is not free: Olsyn Drive is starting, updating or
+signed out, and will want the letter back. Olsyn Drive never takes a letter another program holds; it reports
+it, waits, and connects by itself when the letter is free again.
