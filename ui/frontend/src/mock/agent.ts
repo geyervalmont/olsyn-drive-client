@@ -813,6 +813,8 @@ export class MockAgent {
         this.account = { ...this.account!, linked_at: this.iso() }
         this.startingUntil = this.sim + 1.5
         this.addActivity('signed_in', 'Signed in as Ada Example', 'This PC is linked to your drive.', null)
+        // As the real agent: a letter chosen before is connected again by itself.
+        if (this.letterConfirmed && (this.driver.state === 'ok' || this.driver.state === 'not_needed')) this.doMount()
       })
     }
     return ok(this.signin, 202)
@@ -1107,6 +1109,51 @@ export class MockAgent {
     })
     this.at(steps * 0.5 + 2.5, () => this.restartAgent())
     return ok(this.update, 202)
+  }
+
+  // ---------- what happens outside this window (tests and the dev bar) ----------
+
+  /** The PC is removed from the account in the web app: the next heartbeat signs it out. */
+  revoke() {
+    if (!this.account) return
+    this.account = null
+    this.signin = null
+    this.reason = { code: 'token_revoked', message: 'This PC was removed from your account in the web app.' }
+    this.mount = { ...this.mount, state: 'unmounted', path: null }
+    this.notify('signed_out', 'Signed out by the drive', 'Sign in again to keep using ' + this.settings.drive_letter + ' on this PC.', {
+      label: 'Sign in',
+      open: { target: 'ui', path: 'signin' },
+    })
+    this.publishState()
+  }
+
+  /**
+   * The agent stops and starts again (a crash, a sign-in from another
+   * session, a new version): the stream drops, and after two simulated
+   * seconds a new agent_run answers, with `change` applied while it was down.
+   */
+  restart(change?: (agent: { signIn: () => void; mountNow: () => void; signOut: () => void }) => void) {
+    this.agentDown = true
+    this.dropSubscribers('The agent stopped.')
+    this.at(2, () => {
+      change?.({
+        signIn: () => this.signInAs(),
+        mountNow: () => {
+          this.letterConfirmed = true
+          this.mounted()
+        },
+        signOut: () => {
+          this.account = null
+          this.signin = null
+          this.mount = { ...this.mount, state: 'unmounted', path: null }
+        },
+      })
+      this.run = 'r' + Math.random().toString(36).slice(2, 8)
+      this.log = []
+      this.seq = 0
+      this.startedAt = this.iso()
+      this.agentDown = false
+    })
   }
 
   /** Simulates the swap: the stream drops, a new agent_run answers with the new version. */

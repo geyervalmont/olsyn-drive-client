@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Onboarding, needsDriver, type OnboardingStep } from './screens/Onboarding'
+import { Onboarding } from './screens/Onboarding'
 import { MainWindow } from './screens/main/MainWindow'
 import { Popover } from './screens/popover/Popover'
 import { useAgentContext, useAgentView } from './state/context'
+import { initialSetupMemory, rememberSetup, setupStep, type SetupMemory } from './state/setup'
 import { LetterMark } from './ui/LetterMark'
 import { Spinner } from './ui/Progress'
 import { useToast } from './ui/Toasts'
@@ -12,34 +13,30 @@ export type Surface = 'main' | 'popover'
 
 export function App({ surface }: { surface: Surface }) {
   const view = useAgentView()
-  const { shell } = useAgentContext()
+  const { shell, connection } = useAgentContext()
   const [route, setRoute] = useState(() => (typeof location !== 'undefined' && location.hash.slice(1)) || 'transfers/active')
   const navigate = useCallback((next: string) => {
     setRoute(next)
     if (typeof history !== 'undefined') history.replaceState(null, '', '#' + next)
   }, [])
-  const [onboarding, setOnboarding] = useState<OnboardingStep | null>(null)
-  // Set when the person closes a setup that is not finished (driver waits
-  // for a restart of Windows), so it is not put straight back.
-  const [setupDeferred, setSetupDeferred] = useState(false)
+  const [setup, setSetup] = useState<SetupMemory>(initialSetupMemory)
   const state = view.state
 
   useEffect(() => shell.onRoute(navigate), [shell, navigate])
+  useRefreshOnActivate(connection.refresh.bind(connection))
 
-  // First run, or signed out: the setup flow takes the main window.
+  // The setup step is worked out from the agent's state on every render, so
+  // the window always shows what the agent says (state/setup.ts).
+  const step = surface === 'main' && state ? setupStep(state, setup) : null
   useEffect(() => {
-    if (surface !== 'main' || !state) return
-    if (onboarding !== null) return
-    if (!state.account) setOnboarding(state.signin?.state === 'waiting' ? 'signin' : 'welcome')
-    // Signed in, but the drive letter was never chosen (the app was closed
-    // during setup, or Windows was restarted for the driver): finish setup.
-    else if (state.mount.letter_confirmed === false && !setupDeferred) setOnboarding(needsDriver(state.driver.state) ? 'driver' : 'letter')
-  }, [surface, state, onboarding, setupDeferred])
+    if (state) setSetup((m) => rememberSetup(m, state, step))
+  }, [state, step])
 
+  // "signin" (the popover's Sign in, a "signed out" notification) opens the
+  // sign-in step when signed out; signed in, it is just the main window.
   useEffect(() => {
-    if (route !== 'signin') return
-    if (!state) return
-    if (!state.account) setOnboarding('signin')
+    if (route !== 'signin' || !state) return
+    if (!state.account) setSetup((m) => (m.signinOpen ? m : { ...m, signinOpen: true }))
     navigate('transfers/active')
   }, [route, state, navigate])
 
@@ -54,17 +51,39 @@ export function App({ surface }: { surface: Surface }) {
   if (!state) return <Starting />
   return (
     <>
-      {onboarding ? <Onboarding
-          key={onboarding}
-          startAt={onboarding}
-          onDone={() => {
-            setSetupDeferred(true)
-            setOnboarding(null)
-          }}
-        /> : <MainWindow route={route} navigate={navigate} />}
+      {step ? (
+        <Onboarding
+          step={step}
+          driverShown={setup.driverShown}
+          onSignIn={() => setSetup((m) => ({ ...m, signinOpen: true }))}
+          onBack={() => setSetup((m) => ({ ...m, signinOpen: false }))}
+          onDeferDriver={() => setSetup((m) => ({ ...m, driverDeferredFor: state.driver.state }))}
+          onDone={() => setSetup((m) => ({ ...m, doneOwed: false }))}
+        />
+      ) : (
+        <MainWindow route={route} navigate={navigate} />
+      )}
       <BrowserNotifications navigate={navigate} />
     </>
   )
+}
+
+/** Reads the agent's state again whenever the window comes to the front. */
+function useRefreshOnActivate(refresh: () => void) {
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refresh()
+    }
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+    // refresh is bound once per connection
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 }
 
 function Starting() {
@@ -86,7 +105,6 @@ function Starting() {
     </main>
   )
 }
-
 /** The desktop shell turns notifications into Windows toasts; in a browser they show in the window. */
 function BrowserNotifications({ navigate }: { navigate: (route: string) => void }) {
   const { connection, shell, client } = useAgentContext()

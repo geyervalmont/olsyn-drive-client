@@ -7,37 +7,37 @@ import { formatCountdown, secondsUntil } from '../lib/format'
 import { useNow } from '../lib/useNow'
 import { errorText, useAction, useAgentContext, useAgentView } from '../state/context'
 import { cacheExplainer } from '../state/derive'
+import { needsDriver, type SetupStep } from '../state/setup'
 import { Icon } from '../ui/Icon'
 import { LetterMark } from '../ui/LetterMark'
 import { Spinner } from '../ui/Progress'
 import { Button, InlineError } from '../ui/controls'
 
-export type OnboardingStep = 'welcome' | 'signin' | 'driver' | 'letter' | 'done'
+export type OnboardingStep = SetupStep
+export { needsDriver }
 
-export const needsDriver = (state: string | undefined) =>
-  state === 'missing' || state === 'outdated' || state === 'installing' || state === 'restart_needed'
+export interface OnboardingProps {
+  /** The step to show: worked out from the agent's state by the app (state/setup.ts), never kept here. */
+  step: SetupStep
+  /** The driver step was shown in this window, so the step list keeps it. */
+  driverShown: boolean
+  /** Welcome: the person chose Sign in. */
+  onSignIn: () => void
+  /** Sign-in: the person chose Cancel or Back. */
+  onBack: () => void
+  /** Driver: the person closed the step until the driver's state changes (Windows needs a sign-out first). */
+  onDeferDriver: () => void
+  /** Done: the person closed the last step. */
+  onDone: () => void
+}
 
-export function Onboarding({ onDone, startAt = 'welcome' }: { onDone: () => void; startAt?: OnboardingStep }) {
+export function Onboarding({ step, driverShown, onSignIn, onBack, onDeferDriver, onDone }: OnboardingProps) {
   const view = useAgentView()
   const state = view.state
-  const [step, setStep] = useState<OnboardingStep>(startAt)
-  const [driverStepShown, setDriverStepShown] = useState(false)
-
-  // Signed in: move on by itself. The drive is not connected before the
-  // person has chosen its letter (mount.letter_confirmed).
-  const letterChosen = state?.mount.letter_confirmed !== false && state?.mount.state === 'mounted'
-  useEffect(() => {
-    if (step !== 'signin' || !state?.account) return
-    if (needsDriver(state.driver.state)) {
-      setDriverStepShown(true)
-      setStep('driver')
-    } else if (letterChosen) setStep('done')
-    else setStep('letter')
-  }, [step, state?.account, state?.driver.state, letterChosen])
 
   const steps: { key: OnboardingStep; label: string }[] = [
     { key: 'signin', label: 'Sign in' },
-    ...(driverStepShown || needsDriver(state?.driver.state) ? [{ key: 'driver' as const, label: 'Windows component' }] : []),
+    ...(driverShown || needsDriver(state?.driver.state) ? [{ key: 'driver' as const, label: 'Windows component' }] : []),
     { key: 'letter', label: 'Drive letter' },
     { key: 'done', label: 'Done' },
   ]
@@ -58,10 +58,10 @@ export function Onboarding({ onDone, startAt = 'welcome' }: { onDone: () => void
             ))}
           </ol>
         )}
-        {step === 'welcome' && <Welcome onNext={() => setStep('signin')} />}
-        {step === 'signin' && <SignInStep onBack={() => setStep('welcome')} />}
-        {step === 'driver' && <DriverStep onNext={() => (letterChosen ? setStep('done') : setStep('letter'))} onLater={onDone} />}
-        {step === 'letter' && <LetterStep onNext={() => setStep('done')} />}
+        {step === 'welcome' && <Welcome onNext={onSignIn} />}
+        {step === 'signin' && <SignInStep onBack={onBack} />}
+        {step === 'driver' && <DriverStep onLater={onDeferDriver} />}
+        {step === 'letter' && <LetterStep />}
         {step === 'done' && <DoneStep onDone={onDone} />}
       </div>
     </main>
@@ -269,16 +269,12 @@ const DRIVER_STEPS: { key: DriverProgress; label: string }[] = [
   { key: 'installing', label: 'Adding WinFsp' },
 ]
 
-function DriverStep({ onNext, onLater }: { onNext: () => void; onLater: () => void }) {
+function DriverStep({ onLater }: { onLater: () => void }) {
   const view = useAgentView()
   const { client } = useAgentContext()
   const driver = view.state?.driver
   const { pending, error, run } = useAction()
   const installing = driver?.state === 'installing' || pending === 'install'
-
-  useEffect(() => {
-    if (driver?.state === 'ok' || driver?.state === 'not_needed') onNext()
-  }, [driver?.state, onNext])
 
   if (driver?.state === 'restart_needed') {
     return (
@@ -349,14 +345,13 @@ function DriverStep({ onNext, onLater }: { onNext: () => void; onLater: () => vo
   )
 }
 
-function LetterStep({ onNext }: { onNext: () => void }) {
+function LetterStep() {
   const view = useAgentView()
   const { client } = useAgentContext()
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [choice, setChoice] = useState<string | null>(null)
   const { pending, error, run } = useAction()
-  const [connecting, setConnecting] = useState(false)
   const mount = view.state?.mount
 
   const load = () => {
@@ -372,10 +367,6 @@ function LetterStep({ onNext }: { onNext: () => void }) {
   }
   useEffect(load, [client])
 
-  useEffect(() => {
-    if (connecting && mount?.state === 'mounted') onNext()
-  }, [connecting, mount?.state, onNext])
-
   const letters = [...(settings?.choices.drive_letters ?? [])].sort()
   // The usual letter is taken on this PC (a disk, a network drive — even a
   // disconnected one — or subst): say so, next to the letter picked instead.
@@ -384,10 +375,9 @@ function LetterStep({ onNext }: { onNext: () => void }) {
   const connect = () =>
     run('connect', async () => {
       try {
-        setConnecting(true)
+        // Once the agent takes the letter (mount.letter_confirmed), the app moves on by itself.
         await client.mount(choice ?? undefined)
       } catch (e) {
-        setConnecting(false)
         load() // the letters may have changed meanwhile
         throw e
       }
@@ -405,7 +395,7 @@ function LetterStep({ onNext }: { onNext: () => void }) {
     ;(e.currentTarget.querySelector('[data-letter="' + letters[next] + '"]') as HTMLElement | null)?.focus()
   }
 
-  const failed = mount?.state === 'failed' && connecting
+  const failed = mount?.state === 'failed'
   return (
     <section className="onb-step" aria-labelledby="onboarding-title">
       <h1 id="onboarding-title" className="onb-title display">
@@ -444,7 +434,7 @@ function LetterStep({ onNext }: { onNext: () => void }) {
       {failed && <InlineError message={mount?.error?.message ?? "The drive couldn't be connected. Try another letter."} />}
       {error && <InlineError message={error.code === 'busy' ? 'Close files open on the drive, then try again.' : error.message} />}
       <div className="onb-actions">
-        <Button variant="primary" size="l" disabled={!settings} pending={pending === 'connect' || (connecting && mount?.state === 'mounting')} onClick={() => void connect()}>
+        <Button variant="primary" size="l" disabled={!settings} pending={pending === 'connect' || mount?.state === 'mounting'} onClick={() => void connect()}>
           {choice ? 'Connect ' + choice : 'Connect'}
         </Button>
       </div>
@@ -462,14 +452,26 @@ function DoneStep({ onDone }: { onDone: () => void }) {
   const view = useAgentView()
   const { client } = useAgentContext()
   const { pending, error, run } = useAction()
-  const letter = view.state?.mount.letter ?? 'W:'
+  const mount = view.state?.mount
+  const letter = mount?.letter ?? 'W:'
+  const mounted = mount?.state === 'mounted'
+  const failed = mount?.state === 'failed'
   return (
     <section className="onb-step onb-done" aria-labelledby="onboarding-title">
-      <LetterMark letter={letter} tone="ok" progress={1} size={104} />
+      <LetterMark letter={letter} tone={failed ? 'warn' : mounted ? 'ok' : 'busy'} progress={mounted ? 1 : null} size={104} />
       <h1 id="onboarding-title" className="onb-title display">
-        Your drive is {letter}
+        {mounted ? 'Your drive is ' + letter : failed ? letter + " isn't connected yet." : 'Connecting ' + letter + '.'}
       </h1>
-      <p className="onb-lead">Look for Olsyn Drive ({letter}) in File Explorer. Olsyn Drive keeps working from the tray, next to the clock.</p>
+      <p className="onb-lead">
+        {failed
+          ? (mount?.error?.message ?? "The drive couldn't be connected to its letter.") + ' Olsyn Drive keeps trying, and its window shows what to do.'
+          : 'Look for Olsyn Drive (' + letter + ') in File Explorer. Olsyn Drive keeps working from the tray, next to the clock.'}
+      </p>
+      {!mounted && !failed && (
+        <p className="code-wait">
+          <Spinner size={14} /> This takes a few seconds.
+        </p>
+      )}
       <p className="onb-fine">{cacheExplainer}</p>
       {error && <InlineError message={error.message} />}
       <div className="onb-actions">
@@ -477,6 +479,7 @@ function DoneStep({ onDone }: { onDone: () => void }) {
           variant="primary"
           size="l"
           icon="folder"
+          disabled={!mounted}
           pending={pending === 'open'}
           data-autofocus
           onClick={() =>

@@ -50,6 +50,27 @@ export class AgentConnection {
     this.open()
   }
 
+  /**
+   * Reads the agent's state now (the window came to the front). The event
+   * stream keeps the window current; this covers a stream that went quiet
+   * without an error, so what the window shows is never older than its last
+   * activation.
+   */
+  refresh() {
+    if (this.stopped) return
+    const stream = this.store.getState().stream
+    if (stream === 'reconnecting' || stream === 'unreachable') {
+      this.retryNow()
+      return
+    }
+    this.client
+      .state()
+      .then((state) => {
+        if (!this.stopped) this.store.dispatch({ type: 'state', state })
+      })
+      .catch(() => undefined)
+  }
+
   onEvent(listener: EventListener): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)

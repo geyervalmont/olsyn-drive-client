@@ -52,10 +52,11 @@ export function Popover() {
 
       <Banners navigate={open} compact />
 
-      {!state?.account && state && (
+      {/* Signed out by the drive: the banner above has its own Sign in. */}
+      {!state?.account && state && state.reason?.code !== 'token_revoked' && (
         <div className="pop-signin">
           <Button variant="primary" onClick={() => open('signin')}>
-            Sign in
+            {state.signin?.state === 'waiting' ? 'Show the code' : 'Sign in'}
           </Button>
         </div>
       )}
