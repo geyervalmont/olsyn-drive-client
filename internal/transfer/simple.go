@@ -87,6 +87,10 @@ func (s *Simple) emit(e Event) {
 // errRestart means the upload session is gone: start a new one.
 var errRestart = errors.New("transfer: upload session gone")
 
+// errDateRefused means the drive refused the modified time at upload start
+// (nothing was created): start again without it.
+var errDateRefused = errors.New("transfer: the drive refused the file's modified time")
+
 // ErrChecksumMismatch means the drive received bytes whose SHA-256 differs
 // from this PC's, on the first attempt and again on a fresh upload. The
 // error also carries the drive's checksum_mismatch refusal. Hold the change:
@@ -98,8 +102,8 @@ var ErrChecksumMismatch = errors.New("transfer: the drive received different byt
 // later pass (see FS checksum handling in vfs).
 func (s *Simple) Upload(ctx context.Context, req UploadRequest) (*UploadResult, error) {
 	ev := Event{Direction: Up, TransferID: req.TransferID, Name: req.Name, Total: req.Size}
-	var sum string
-	if req.PreCheck {
+	sum := req.SHA256
+	if req.PreCheck && sum == "" {
 		h, err := hashReaderAt(ctx, req.Src, req.Size)
 		if err != nil {
 			return nil, fmt.Errorf("transfer: hash %s: %w", req.TransferID, err)
@@ -127,8 +131,17 @@ func (s *Simple) Upload(ctx context.Context, req UploadRequest) (*UploadResult, 
 
 	uploadID := req.UploadID
 	restarts, mismatches := 0, 0
+	dateNotKept := false
 	for {
 		res, err := s.uploadOnce(ctx, req, uploadID, sum, &ev)
+		if errors.Is(err, errDateRefused) && !dateNotKept {
+			// refused before anything was created: send it once more
+			// without its date, and say so
+			dateNotKept = true
+			s.log.InfoContext(ctx, "drive refused the file's date; sending it without", "transfer", req.TransferID)
+			req.ModifiedAt = time.Time{}
+			continue
+		}
 		if errors.Is(err, ErrChecksumMismatch) && mismatches == 0 {
 			// the drive got other bytes than ours: send it all again once,
 			// hashing again too (the first hash may have been the bad read)
@@ -149,6 +162,9 @@ func (s *Simple) Upload(ctx context.Context, req UploadRequest) (*UploadResult, 
 			return nil, err
 		}
 		ev.Kind, ev.Bytes = EventDone, req.Size
+		if dateNotKept {
+			res.DateNotKept, ev.Note = true, NoteDateNotKept
+		}
 		s.emit(ev)
 		return res, nil
 	}
@@ -202,6 +218,9 @@ func (s *Simple) uploadOnce(ctx context.Context, req UploadRequest, uploadID, su
 		tk, err = s.api.StartUpload(ctx, start)
 		return err
 	})
+	if start.ModifiedAt != nil && driveapi.IsInvalidModifiedAt(err) {
+		return nil, fmt.Errorf("%w: %w", errDateRefused, err)
+	}
 	if err != nil {
 		return nil, err
 	}

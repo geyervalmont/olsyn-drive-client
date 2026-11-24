@@ -12,7 +12,6 @@ import (
 	"path"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -42,6 +41,10 @@ const (
 	OnConflictNewVersion = "new_version"
 	OnConflictKeepBoth   = "keep_both"
 )
+
+// DateNotKeptReason says, in plain words, that a file was sent without its
+// date.
+const DateNotKeptReason = "Sent, but without its date: the drive does not accept the date this file has, so it shows when it was uploaded instead."
 
 // Send outcomes.
 const (
@@ -119,6 +122,10 @@ type sendJob struct {
 	f   SendFile
 	rel string // below the destination
 	mt  time.Time
+	// what the batch pre-check found (sendcheck.go)
+	present bool   // the drive has this file already
+	checked bool   // the drive does not: upload without asking again
+	sum     string // its SHA-256, when worked out for the pre-check
 }
 
 // Send runs one batch to the end: every file found gets a Result. The
@@ -136,8 +143,10 @@ func (s *Sender) Send(ctx context.Context, spec SendSpec, rep SendReport) error 
 	}
 	ctx, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
-	folders := &folderCache{api: s.API, root: spec.ParentID, rootPath: spec.ParentPath, ids: map[string]string{"": spec.ParentID}}
+	folders := newFolderCache(s.API, spec.ParentID, spec.ParentPath)
+	pending := make(chan sendJob, spec.Files*2)
 	jobs := make(chan sendJob, spec.Files*2)
+	go s.checkStage(ctx, spec, folders, pending, jobs, rep)
 	var wg sync.WaitGroup
 	for range spec.Files {
 		wg.Add(1)
@@ -166,7 +175,7 @@ func (s *Sender) Send(ctx context.Context, spec SendSpec, rep SendReport) error 
 		f := SendFile{ID: spec.BatchID + "_" + strconv.Itoa(n), Local: local, DrivePath: path.Join(spec.ParentPath, rel), Size: size}
 		rep.found(f)
 		select {
-		case jobs <- sendJob{f: f, rel: rel, mt: mt}:
+		case pending <- sendJob{f: f, rel: rel, mt: mt}:
 			return nil
 		case <-ctx.Done():
 			// found but never queued (the queue was full): it still gets
@@ -191,7 +200,7 @@ func (s *Sender) Send(ctx context.Context, spec SendSpec, rep SendReport) error 
 			break
 		}
 	}
-	close(jobs)
+	close(pending)
 	wg.Wait()
 	if rep.Scanned != nil {
 		rep.Scanned()
@@ -262,7 +271,7 @@ func (s *Sender) sendOne(ctx context.Context, spec SendSpec, folders *folderCach
 			}
 			return nil
 		}
-		outcome, code, reason, err := s.tryOne(fctx, ctx, spec, folders, j)
+		outcome, code, reason, err := s.tryOne(fctx, ctx, spec, folders, j, attempt)
 		switch {
 		case err == nil:
 			rep.result(j.f, outcome, code, reason)
@@ -303,22 +312,34 @@ func (s *Sender) sendOne(ctx context.Context, spec SendSpec, folders *folderCach
 // tryOne makes one attempt. A nil error comes with the final outcome.
 // ctx bounds this file; run is the batch's. An upload the person cancelled
 // (this file, or the whole batch) is aborted on the drive, so nothing of it
-// is kept there; one stopped with the session stays to be resumed.
-func (s *Sender) tryOne(ctx, run context.Context, spec SendSpec, folders *folderCache, j sendJob) (outcome, code, reason string, err error) {
-	var session string
+// is kept there; one stopped with the session stays to be resumed. The
+// batch pre-check's answer stands for the first attempt; a later one asks
+// the drive again (an earlier attempt may have got the file there).
+func (s *Sender) tryOne(ctx, run context.Context, spec SendSpec, folders *folderCache, j sendJob, attempt int) (outcome, code, reason string, err error) {
+	if j.present && attempt == 0 {
+		return SendSkipped, "already_there", "The drive already has this file.", nil
+	}
+	var session, startedParent, startedFP string
 	defer func() {
 		cancelled := ctx.Err() != nil && (run.Err() == nil || errors.Is(context.Cause(run), ErrSendCancelled))
-		if err == nil || session == "" || !cancelled {
+		if err == nil || !cancelled || (session == "" && startedFP == "") {
 			return
 		}
 		actx, done := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer done()
+		if session == "" {
+			// cancelled while the start was on its way: the drive may have
+			// made the session without our hearing its id
+			if session = s.findSession(actx, startedParent, startedFP); session == "" {
+				return
+			}
+		}
 		if aerr := s.API.AbortUpload(actx, session); aerr != nil && !driveapi.IsNotFound(aerr) {
 			s.log().Warn("send: abort a cancelled upload", "transfer", j.f.ID, "code", errCodeOf(aerr))
 		}
 	}()
-	dir, name := path.Split(j.rel)
-	parentID, err := folders.ensure(ctx, strings.TrimSuffix(dir, "/"))
+	name := path.Base(j.rel)
+	folder, err := folders.get(ctx, relDir(j.rel))
 	if err != nil {
 		if driveapi.IsPermanent(err) || errors.Is(err, errNotAFolder) {
 			return refusal(err)
@@ -334,10 +355,14 @@ func (s *Sender) tryOne(ctx, run context.Context, spec SendSpec, folders *folder
 	if err != nil {
 		return SendFailed, "unreadable", "Can't be read: " + err.Error(), nil
 	}
-	req := UploadRequest{TransferID: j.f.ID, ParentID: parentID, Name: name, Size: before.Size(), Src: f,
+	req := UploadRequest{TransferID: j.f.ID, ParentID: folder.id, Name: name, Size: before.Size(), Src: f,
 		Mime: mime.TypeByExtension(path.Ext(name)), Conflict: driveapi.ConflictFail, ModifiedAt: before.ModTime(),
-		Fingerprint: sendFingerprint(j.f.Local, before.Size(), before.ModTime()), PreCheck: true,
+		Fingerprint: sendFingerprint(j.f.Local, before.Size(), before.ModTime()), PreCheck: attempt > 0 || !(j.checked || folder.created),
 		OnSession: func(id string) { session = id }}
+	if before.Size() == j.f.Size && before.ModTime().Equal(j.mt) {
+		req.SHA256 = j.sum // hashed for the pre-check, and unchanged since
+	}
+	startedParent, startedFP = req.ParentID, req.Fingerprint
 	res, err := s.Engine.Upload(ctx, req)
 	if driveapi.IsConflict(err) {
 		switch spec.Conflict {
@@ -371,7 +396,26 @@ func (s *Sender) tryOne(ctx, run context.Context, spec SendSpec, folders *folder
 	if res.Skipped {
 		return SendSkipped, "already_there", "The drive already has this file.", nil
 	}
+	if res.DateNotKept {
+		return SendDone, NoteDateNotKept, DateNotKeptReason, nil
+	}
 	return SendDone, "", "", nil
+}
+
+// findSession returns the id of the caller's unfinished upload into parent
+// with this fingerprint, or "".
+func (s *Sender) findSession(ctx context.Context, parent, fingerprint string) string {
+	ups, err := s.API.ListUploads(ctx)
+	if err != nil {
+		s.log().Warn("send: list unfinished uploads", "code", errCodeOf(err))
+		return ""
+	}
+	for _, u := range ups {
+		if u.ParentID == parent && u.Fingerprint == fingerprint {
+			return u.UploadID
+		}
+	}
+	return ""
 }
 
 func (s *Sender) log() *slog.Logger {
@@ -397,52 +441,6 @@ func refusal(err error) (string, string, string, error) {
 func sendFingerprint(abs string, size int64, mt time.Time) string {
 	h := sha256.Sum256([]byte(filepath.ToSlash(abs)))
 	return fmt.Sprintf("olsyn-drive-send/1|%d|%d|%s", size, mt.UnixNano(), hex.EncodeToString(h[:8]))
-}
-
-var errNotAFolder = errors.New("a file on the drive has the name of a folder being sent")
-
-// folderCache makes the batch's folders on the drive, once each.
-type folderCache struct {
-	api      *driveapi.Client
-	root     string
-	rootPath string
-	mu       sync.Mutex
-	ids      map[string]string // rel dir → id
-}
-
-func (c *folderCache) ensure(ctx context.Context, rel string) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.ensureLocked(ctx, rel)
-}
-
-func (c *folderCache) ensureLocked(ctx context.Context, rel string) (string, error) {
-	if id, ok := c.ids[rel]; ok {
-		return id, nil
-	}
-	parent, name := path.Split(rel)
-	pid, err := c.ensureLocked(ctx, strings.TrimSuffix(parent, "/"))
-	if err != nil {
-		return "", err
-	}
-	n, err := c.api.CreateFolder(ctx, pid, name, driveapi.ConflictFail, time.Time{})
-	if driveapi.IsConflict(err) {
-		n, err = c.api.ResolvePath(ctx, path.Join(c.rootPath, rel))
-		if err == nil && !n.IsDir() {
-			return "", fmt.Errorf("%w: %s", errNotAFolder, path.Join(c.rootPath, rel))
-		}
-	}
-	if err != nil {
-		return "", err
-	}
-	c.ids[rel] = n.ID
-	return n.ID, nil
-}
-
-// rootGone reports whether the destination folder no longer exists.
-func (c *folderCache) rootGone(ctx context.Context) bool {
-	_, err := c.api.GetNode(ctx, c.root)
-	return driveapi.IsNotFound(err)
 }
 
 func (r SendReport) found(f SendFile) {

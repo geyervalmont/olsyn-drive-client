@@ -208,6 +208,8 @@ empty, so the UI can say "Uploading 105 of 120"; 0 when idle.
   in that order of preference. `reupload` is offered only for `checksum_mismatch` while this PC still has the
   bytes; `save_copy` only while it has them.
 - `conflict_copy`: when the drive's file changed under us, the drive path our copy was saved as.
+- `note` (only when set): `date_not_kept` on a `done` upload the drive accepted without its modified time
+  (the drive refused that date as out of its range, so it shows when the file was uploaded instead).
 - `can`: which of `POST /v1/transfers/{id}/retry|cancel` would succeed now. Mount uploads are never
   cancellable (that would lose a saved file); use discard on a held item instead.
 

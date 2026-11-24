@@ -55,6 +55,9 @@ type UploadRequest struct {
 	// SHA-256 is always sent at completion: the drive checks files up to
 	// 64 MiB at once and records larger ones as claimed until its own pass.)
 	PreCheck bool
+	// SHA256 is the content's SHA-256 when the caller already worked it out
+	// (hex); the engine then does not read the file for it again.
+	SHA256 string
 	// OnSession is called with the drive's upload id as soon as it is
 	// known, so the caller can persist it for a resume after a crash.
 	OnSession func(uploadID string)
@@ -66,7 +69,14 @@ type UploadResult struct {
 	Skipped bool // pre-check found identical content: nothing sent
 	Resumed bool // carried on from parts sent earlier
 	Sent    int64
+	// DateNotKept: the drive refused the file's modified time (out of its
+	// range), so it was sent without one and the drive shows its own date.
+	DateNotKept bool
 }
+
+// NoteDateNotKept is Event.Note when the drive refused a file's modified
+// time and the file was sent without it.
+const NoteDateNotKept = "date_not_kept"
 
 // DownloadRequest describes one ranged download.
 type DownloadRequest struct {
@@ -111,6 +121,8 @@ type Event struct {
 	Total      int64
 	Err        error
 	At         time.Time
+	// Note qualifies a done upload: NoteDateNotKept, or "".
+	Note string
 }
 
 // BufferAt is an io.WriterAt over a byte slice holding [Base, Base+len).

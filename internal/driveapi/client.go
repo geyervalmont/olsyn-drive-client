@@ -3,8 +3,11 @@
 // the changes feed and its SSE wake-ups, ranged downloads, uploads and the
 // signed release manifest.
 //
-// The client never retries by itself: callers decide with the classification
-// helpers (IsRetryable, IsPermanent, IsConflict, IsAuthLost) and Backoff.
+// The client retries only one thing by itself: a 429 rate_limited answer is
+// waited out (Retry-After, shared by every request of the Client, bounded;
+// see pace.go). Everything else is the caller's decision, with the
+// classification helpers (IsRetryable, IsPermanent, IsConflict, IsAuthLost)
+// and Backoff.
 // The bearer token comes from a callback on every request and is never logged.
 package driveapi
 
@@ -48,6 +51,10 @@ type Options struct {
 	// means slog.Default(). Tokens, query strings of presigned URLs and
 	// bodies are never logged.
 	Logger *slog.Logger
+	// CheckPerMinute paces pre-check calls (POST /api/v1/uploads/check) to
+	// stay under the drive's limit of CheckRateLimit a minute per person:
+	// 0 means CheckPacePerMinute, a negative value no pacing (tests).
+	CheckPerMinute int
 }
 
 // Client talks to one drive.
@@ -57,6 +64,10 @@ type Client struct {
 	http  *http.Client
 	ua    string
 	log   *slog.Logger
+	pace  *pacer  // the drive's 429 waits, shared by every request
+	check *bucket // pre-check pacing; nil: none
+	// rateRetries is how many 429s one call waits out (tests lower it)
+	rateRetries int
 }
 
 // New returns a client for the drive at opts.BaseURL.
@@ -88,7 +99,12 @@ func New(opts Options) (*Client, error) {
 	if ua == "" {
 		ua = "olsyn-drive"
 	}
-	return &Client{base: u, token: tok, http: hc, ua: ua, log: log}, nil
+	per := opts.CheckPerMinute
+	if per == 0 {
+		per = CheckPacePerMinute
+	}
+	return &Client{base: u, token: tok, http: hc, ua: ua, log: log, pace: &pacer{}, check: newBucket(per, checkBurst),
+		rateRetries: rateRetries}, nil
 }
 
 // BaseURL returns the drive's site URL.
@@ -115,14 +131,35 @@ func (c *Client) url(path string, q url.Values) string {
 }
 
 // send performs the request and returns the response for statuses below 300
-// (and the extra accepted ones). Other statuses become *Error.
+// (and the extra accepted ones). Other statuses become *Error. A 429 is
+// waited out and sent again (rateRetries times) before it is returned.
 func (c *Client) send(ctx context.Context, r request) (*http.Response, error) {
-	var body io.Reader
+	var body []byte
 	if r.body != nil {
 		b, err := json.Marshal(r.body)
 		if err != nil {
 			return nil, fmt.Errorf("drive: %s: encode body: %w", r.op, err)
 		}
+		body = b
+	}
+	for n := 0; ; n++ {
+		if err := c.pace.wait(ctx); err != nil {
+			return nil, &Error{Op: r.op, Err: err}
+		}
+		resp, err := c.sendOnce(ctx, r, body)
+		var e *Error
+		if n >= c.rateRetries || !errors.As(err, &e) || e.Status != http.StatusTooManyRequests {
+			return resp, err
+		}
+		d := rateWait(n, e.RetryAfter)
+		c.pace.hold(d)
+		c.log.InfoContext(ctx, "drive asked to wait", "op", r.op, "wait_ms", d.Milliseconds(), "attempt", n+1)
+	}
+}
+
+func (c *Client) sendOnce(ctx context.Context, r request, b []byte) (*http.Response, error) {
+	var body io.Reader
+	if b != nil {
 		body = bytes.NewReader(b)
 	}
 	req, err := http.NewRequestWithContext(ctx, r.method, c.url(r.path, r.query), body)

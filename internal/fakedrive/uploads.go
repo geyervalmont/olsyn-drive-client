@@ -64,6 +64,9 @@ func (s *Server) uploadStart(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.rateLimitedLocked(w, "upload.start", s.opts.UploadStartRate) {
+		return
+	}
 	p := s.nodes[req.ParentID]
 	if p == nil || p.kind != driveapi.KindFolder || !s.liveLocked(p) {
 		fail(w, http.StatusNotFound, driveapi.CodeNotFound, "no such folder", nil)
@@ -76,8 +79,10 @@ func (s *Server) uploadStart(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusUnprocessableEntity, driveapi.CodeInvalidName, "bad name", nil)
 		return
 	}
-	if req.ModifiedAt != nil && req.ModifiedAt.After(time.Now().Add(10*time.Minute)) {
-		fail(w, http.StatusUnprocessableEntity, driveapi.CodeInvalidModifiedAt, "in the future", map[string]any{"field": "modified_at"})
+	if req.ModifiedAt != nil && !modifiedAtOK(req.ModifiedAt.Time) {
+		// before anything is created: no upload, no pending version
+		s.counts["upload.start.422.modified_at"]++
+		fail(w, http.StatusUnprocessableEntity, driveapi.CodeInvalidModifiedAt, "out of range", map[string]any{"field": "modified_at"})
 		return
 	}
 	if req.Fingerprint != "" {
@@ -406,10 +411,20 @@ func (s *Server) uploadCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(req.Files) > driveapi.CheckMax {
-		fail(w, http.StatusUnprocessableEntity, driveapi.CodeInvalid, "too many", nil)
+	if s.rateLimitedLocked(w, "check", s.opts.CheckRate) {
 		return
 	}
+	parents := map[string]bool{}
+	for _, f := range req.Files {
+		parents[f.ParentID] = true
+	}
+	if len(req.Files) > s.opts.CheckMaxFiles || len(parents) > s.opts.CheckMaxFolders {
+		s.counts["check.422"]++
+		fail(w, http.StatusUnprocessableEntity, driveapi.CodeInvalid,
+			"at most "+strconv.Itoa(s.opts.CheckMaxFiles)+" files in at most "+strconv.Itoa(s.opts.CheckMaxFolders)+" folders", nil)
+		return
+	}
+	s.counts["check"]++
 	items := make([]driveapi.CheckResult, 0, len(req.Files))
 	for _, f := range req.Files {
 		p := s.nodes[f.ParentID]

@@ -374,6 +374,9 @@ func (s *sends) result(br *batchRun, sf transfer.SendFile, outcome, code, reason
 	switch outcome {
 	case transfer.SendDone:
 		t.State, t.BytesDone, t.Error = agent.TransferDone, sf.Size, nil
+		if code != "" {
+			t.Note = &code
+		}
 		br.b.FilesDone++
 		br.doneB += sf.Size
 	case transfer.SendSkipped:

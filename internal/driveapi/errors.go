@@ -214,6 +214,13 @@ func IsNameConflict(err error) bool {
 	return ok && e.Code == CodeNameConflict
 }
 
+// IsInvalidModifiedAt reports the drive refused a client modified time
+// (out of its range, or finer than a millisecond).
+func IsInvalidModifiedAt(err error) bool {
+	e, ok := AsError(err)
+	return ok && e.Code == CodeInvalidModifiedAt
+}
+
 // IsAuthLost reports 401: the token is unknown, revoked or expired.
 // The person must link this PC again.
 func IsAuthLost(err error) bool {

@@ -191,14 +191,62 @@ type CheckResult struct {
 	Probable bool   `json:"probable,omitempty"`
 }
 
-// CheckMax is the most files one pre-check may carry.
-const CheckMax = 1000
+// The drive's limits on POST /api/v1/uploads/check (docs/api.md): a call
+// carries at most CheckMaxFiles files in at most CheckMaxFolders distinct
+// folders (422 beyond either), and a person makes at most CheckRateLimit
+// calls a minute (429 with Retry-After beyond). The bootstrap does not
+// publish them, so they are constants here.
+const (
+	CheckMaxFiles   = 1000
+	CheckMaxFolders = 200
+	CheckRateLimit  = 120
+	// CheckPacePerMinute is the client's own pace, under the limit.
+	CheckPacePerMinute = 100
+	// checkBurst calls may go at once before the pace applies: at most
+	// checkBurst + CheckPacePerMinute (110) in any minute.
+	checkBurst = 10
+)
 
-// CheckUploads asks which files are already on the drive, in order.
+// SplitCheck cuts files into consecutive groups the drive accepts in one
+// pre-check: at most CheckMaxFiles files in at most CheckMaxFolders
+// distinct parent folders each. Order is kept.
+func SplitCheck(files []CheckFile) [][]CheckFile {
+	var out [][]CheckFile
+	start := 0
+	parents := map[string]bool{}
+	for i, f := range files {
+		if i-start == CheckMaxFiles || (!parents[f.ParentID] && len(parents) == CheckMaxFolders) {
+			out = append(out, files[start:i])
+			start = i
+			clear(parents)
+		}
+		parents[f.ParentID] = true
+	}
+	if start < len(files) {
+		out = append(out, files[start:])
+	}
+	return out
+}
+
+// CheckUploads asks which files are already on the drive, in order. Any
+// number of files may be given: they go in as few calls as the drive's
+// limits allow (SplitCheck), each paced to stay under its rate limit.
 // mtimeHint opts in to "probable" answers from equal modified times.
 func (c *Client) CheckUploads(ctx context.Context, files []CheckFile, mtimeHint bool) ([]CheckResult, error) {
-	if len(files) > CheckMax {
-		return nil, fmt.Errorf("drive: pre-check: %d files, at most %d", len(files), CheckMax)
+	out := make([]CheckResult, 0, len(files))
+	for _, group := range SplitCheck(files) {
+		res, err := c.checkOnce(ctx, group, mtimeHint)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, res...)
+	}
+	return out, nil
+}
+
+func (c *Client) checkOnce(ctx context.Context, files []CheckFile, mtimeHint bool) ([]CheckResult, error) {
+	if err := c.check.take(ctx); err != nil {
+		return nil, &Error{Op: "pre-check", Err: err}
 	}
 	body := map[string]any{"files": files}
 	if mtimeHint {

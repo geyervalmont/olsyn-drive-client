@@ -375,6 +375,10 @@ func (f *FS) handle(r *session, ev vfs.Event) {
 		t := f.mountTransfer(r, vfs.Queued{Seq: seq, Name: path.Base(ev.Path), Size: p.total}, ev.Path)
 		t.State, t.BytesDone, t.BPS, t.ETASeconds, t.FinishedAt = agent.TransferDone, p.total, 0, nil, &now
 		t.StartedAt = &p.started
+		if p.note != "" {
+			note := p.note
+			t.Note = &note
+		}
 		f.hist.add(t)
 		f.signal(agent.FSEvent{Transfer: &t})
 		f.mu.Lock()

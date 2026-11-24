@@ -55,6 +55,19 @@ type Options struct {
 	// NoChecksumState is a drive from before checksum states: it ignores
 	// the client's SHA-256 and reports no checksum_state.
 	NoChecksumState bool
+	// CheckMaxFiles and CheckMaxFolders limit one pre-check (POST
+	// /api/v1/uploads/check), 422 beyond either. Default the real drive's:
+	// driveapi.CheckMaxFiles and driveapi.CheckMaxFolders.
+	CheckMaxFiles, CheckMaxFolders int
+	// CheckRate is how many pre-checks may be made per RateWindow; more
+	// answer 429 rate_limited with Retry-After. Default the real drive's
+	// driveapi.CheckRateLimit (a minute); negative: no limit.
+	CheckRate int
+	// UploadStartRate, when set, limits upload starts the same way. The real
+	// drive does not; tests use it to show a 429 on any call is waited out.
+	UploadStartRate int
+	// RateWindow is the window of those rates. Default one minute.
+	RateWindow time.Duration
 }
 
 // Server is a running fake drive.
@@ -78,6 +91,7 @@ type Server struct {
 	release   map[string][]byte // channel -> JSON body
 	streams   map[chan string]struct{}
 	counts    map[string]int
+	rates     map[string]*rateWindow // by limit name
 	heartbeat *driveapi.Heartbeat
 	faults    faults
 	intercept func(w http.ResponseWriter, r *http.Request) bool
@@ -181,6 +195,18 @@ func New(opts Options) *Server {
 	if opts.VerifyMax <= 0 {
 		opts.VerifyMax = 64 << 20
 	}
+	if opts.CheckMaxFiles <= 0 {
+		opts.CheckMaxFiles = driveapi.CheckMaxFiles
+	}
+	if opts.CheckMaxFolders <= 0 {
+		opts.CheckMaxFolders = driveapi.CheckMaxFolders
+	}
+	if opts.CheckRate == 0 {
+		opts.CheckRate = driveapi.CheckRateLimit
+	}
+	if opts.RateWindow <= 0 {
+		opts.RateWindow = time.Minute
+	}
 	s := &Server{
 		opts:      opts,
 		nodes:     map[string]*node{},
@@ -195,6 +221,7 @@ func New(opts Options) *Server {
 		release:   map[string][]byte{},
 		streams:   map[chan string]struct{}{},
 		counts:    map[string]int{},
+		rates:     map[string]*rateWindow{},
 	}
 	now := time.Now().UTC()
 	s.rootID = newID()
@@ -238,7 +265,9 @@ func (s *Server) Close() {
 }
 
 // Count returns how often a thing happened: "upload.start", "upload.complete",
-// "part.put" (and "part.put.multipart" for large files' parts), "download", "children", "changes", "folder.create", "patch", "trash".
+// "part.put" (and "part.put.multipart" for large files' parts), "download", "children", "changes", "folder.create", "patch", "trash",
+// "check" (pre-checks answered), "check.422" (refused for their size), "check.429" and "upload.start.429" (refused for the rate),
+// "upload.start.422.modified_at".
 func (s *Server) Count(name string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

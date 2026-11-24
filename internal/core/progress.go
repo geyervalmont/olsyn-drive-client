@@ -23,6 +23,7 @@ type progress struct {
 type prog struct {
 	bytes, total, bps int64
 	started, at       time.Time
+	note              string // the engine's note on the finished upload
 }
 
 func newProgress() *progress { return &progress{items: map[uint64]*prog{}, sampleAt: time.Now()} }
@@ -48,6 +49,9 @@ func (p *progress) note(seq uint64, e *transfer.Event) {
 		it.at = now
 	}
 	it.bytes, it.total = max(e.Bytes, 0), max(e.Total, it.total)
+	if e.Note != "" {
+		it.note = e.Note
+	}
 }
 
 func (p *progress) get(seq uint64) *prog {

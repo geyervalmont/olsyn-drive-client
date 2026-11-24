@@ -146,8 +146,11 @@ type Transfer struct {
 	Held          *Held          `json:"held"`
 	SkippedReason *string        `json:"skipped_reason"`
 	ConflictCopy  *string        `json:"conflict_copy"`
-	BatchID       *string        `json:"batch_id"`
-	Can           TransferCan    `json:"can"`
+	// Note qualifies a finished transfer: "date_not_kept" when the drive
+	// refused the file's modified time and it was sent without it.
+	Note    *string     `json:"note,omitempty"`
+	BatchID *string     `json:"batch_id"`
+	Can     TransferCan `json:"can"`
 }
 
 // Terminal reports whether the transfer will not change on its own any more.

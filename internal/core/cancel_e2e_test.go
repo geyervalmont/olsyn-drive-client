@@ -56,7 +56,8 @@ func TestCancelSendWhilePausedQueuedOrBackedUp(t *testing.T) {
 	if err := h.client.Do(ctx, http.MethodPost, "/v1/pause", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	// 4 files at once and a queue of 8: the 13th found waits for room
+	// 4 files at once; the others are found ahead (the pre-check reads
+	// ahead to ask about many files at once) and wait for room
 	src := manyFiles(t, 14, 150<<10)
 	var res agent.SendResult
 	if err := h.client.Do(ctx, http.MethodPost, "/v1/send", map[string]any{"local_paths": []string{src}, "drive_folder": "/"}, &res); err != nil {
@@ -66,11 +67,11 @@ func TestCancelSendWhilePausedQueuedOrBackedUp(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		live = h.transfers("active,waiting")
-		if live.Counts.Active == 4 && live.Counts.Waiting == 9 {
+		if live.Counts.Active == 4 && live.Counts.Waiting == 10 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("not paused with 4 active and 9 waiting: %+v", live.Counts)
+			t.Fatalf("not paused with 4 active and 10 waiting: %+v", live.Counts)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -95,8 +96,7 @@ func TestCancelSendWhilePausedQueuedOrBackedUp(t *testing.T) {
 			t.Fatalf("cancel %s: %+v", tr.ID, got)
 		}
 	}
-	// the paused file's place goes to the next one, which makes room for
-	// the 14th: 14 found, 3 cancelled
+	// the paused file's place goes to the next one: 14 found, 3 cancelled
 	deadline = time.Now().Add(5 * time.Second)
 	for {
 		c := h.transfers("active,waiting").Counts

@@ -66,6 +66,7 @@ func TestErrorClassification(t *testing.T) {
 				w.WriteHeader(tc.status)
 				_ = json.NewEncoder(w).Encode(map[string]any{"error": tc.code, "message": "m", "managed_by": "Integration X"})
 			}))
+			c.rateRetries = 0 // the 429 itself, not the waits (TestRateLimited*)
 			_, err := c.GetNode(context.Background(), "n1")
 			if err == nil {
 				t.Fatal("want error")
