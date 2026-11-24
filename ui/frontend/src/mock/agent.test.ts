@@ -62,18 +62,23 @@ describe('MockAgent', () => {
     expect(agent.summary().active).toBeGreaterThan(0)
   })
 
-  it('holds three files with their reasons and lets them be saved or discarded', async () => {
+  it('holds four files with their reasons and lets them be re-uploaded, saved or discarded', async () => {
     const agent = make('held')
     const st = agent.state()
     expect(st.connection).toBe('attention')
     expect(st.issues[0]).toMatchObject({ code: 'held_files', action: 'show_held' })
     const held = (await body<TransferPage>(agent, 'GET', '/v1/transfers?state=held')).items
-    expect(held.map((t) => t.held?.code).sort()).toEqual(['forbidden', 'invalid_name', 'managed'])
+    expect(held.map((t) => t.held?.code).sort()).toEqual(['checksum_mismatch', 'forbidden', 'invalid_name', 'managed'])
     const saved = await body<{ path: string }>(agent, 'POST', '/v1/held/' + held[0].id + '/save-copy', { dest_dir: 'C:\\Temp' })
     expect(saved.path).toContain('C:\\Temp')
     expect((await body<{ discarded: boolean }>(agent, 'POST', '/v1/held/' + held[1].id + '/discard')).discarded).toBe(true)
     const again = await agent.handle('POST', '/v1/held/' + held[1].id + '/discard')
     expect(again.status).toBe(404)
+    expect(agent.state().transfers.held).toBe(2)
+    const damaged = held.find((t) => t.held?.code === 'checksum_mismatch')!
+    const refused = held.slice(2).find((t) => t.held?.code !== 'checksum_mismatch')!
+    expect((await agent.handle('POST', '/v1/held/' + refused.id + '/reupload')).status).toBe(409)
+    expect((await body<{ queued: boolean }>(agent, 'POST', '/v1/held/' + damaged.id + '/reupload')).queued).toBe(true)
     expect(agent.state().transfers.held).toBe(1)
   })
 

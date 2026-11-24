@@ -43,7 +43,12 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	fd := fakedrive.New(fakedrive.Options{PartSize: part, SingleMax: 100 << 10})
+	return newEnvWith(t, fakedrive.Options{PartSize: part, SingleMax: 100 << 10})
+}
+
+func newEnvWith(t *testing.T, opts fakedrive.Options) *env {
+	t.Helper()
+	fd := fakedrive.New(opts)
 	t.Cleanup(fd.Close)
 	api, err := driveapi.New(driveapi.Options{BaseURL: fd.URL(), Token: func(context.Context) (string, error) { return fd.Token(), nil }})
 	if err != nil {

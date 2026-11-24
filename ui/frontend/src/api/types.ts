@@ -144,7 +144,7 @@ export interface Unsent {
 export type Direction = 'up' | 'down'
 export type Origin = 'mount' | 'send' | 'read'
 export type TransferState = 'active' | 'waiting' | 'held' | 'done' | 'skipped' | 'failed' | 'cancelled'
-export type HeldAction = 'save_copy' | 'discard'
+export type HeldAction = 'reupload' | 'save_copy' | 'discard'
 
 export interface Held {
   code: string

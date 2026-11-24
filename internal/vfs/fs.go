@@ -143,14 +143,14 @@ func (fs *FS) recover() error {
 			return err
 		}
 		damaged := false
-		if op.Kind == journal.OpUpload && !fs.cache.Has(op.ContentKey) {
+		if op.Kind == journal.OpUpload && op.ContentKey != "" && !fs.cache.Has(op.ContentKey) {
 			// data survived, metadata did not; a small file's data may not
 			// have reached the disk before a power loss: check it
 			if fs.cache.Adopt(op.ContentKey, op.Size) == nil && op.CRC != 0 {
 				damaged = !fs.contentMatches(op.ContentKey, op.CRC)
 			}
 		}
-		if op.Kind == journal.OpUpload && e.ContentKey == "" && fs.cache.Has(op.ContentKey) {
+		if op.Kind == journal.OpUpload && e.ContentKey == "" && op.ContentKey != "" && fs.cache.Has(op.ContentKey) {
 			e.ContentKey, e.Size = op.ContentKey, op.Size
 		}
 		if perr := fs.idx.Put(e); perr != nil {

@@ -42,6 +42,13 @@ type Options struct {
 	// AutoApprove approves every sign-in link as soon as it starts; otherwise
 	// the link page (GET /link) has an Approve button, or call ApproveLinks.
 	AutoApprove bool
+	// VerifyMax is the largest upload whose SHA-256 the drive checks at
+	// completion (real: 64 MiB); larger ones are "claimed" until the
+	// checksum pass (RunChecksumPass). Default 64 MiB.
+	VerifyMax int64
+	// ChecksumPassDelay, when set, runs the checksum pass that long after
+	// each claimed upload, as the real drive's worker does.
+	ChecksumPassDelay time.Duration
 }
 
 // Server is a running fake drive.
@@ -79,6 +86,7 @@ type faults struct {
 	dropPuts          int
 	dropPutAfter      int64
 	reset             string
+	corruptUploads    int // completes whose stored bytes "differ" from what was sent
 }
 
 type node struct {
@@ -101,6 +109,12 @@ type version struct {
 	fingerprint string
 	created     time.Time
 	modifiedAt  *time.Time
+	// checksum check: state "" (no claim), verified, claimed or mismatch;
+	// claimed is the client's SHA-256 while the pass is to come; corrupt
+	// makes the pass find other bytes (a storage fault).
+	checksumState string
+	claimed       string
+	corrupt       bool
 }
 
 type event struct {
@@ -154,6 +168,9 @@ func New(opts Options) *Server {
 	}
 	if opts.LinkPendingPolls <= 0 {
 		opts.LinkPendingPolls = 1
+	}
+	if opts.VerifyMax <= 0 {
+		opts.VerifyMax = 64 << 20
 	}
 	s := &Server{
 		opts:      opts,
@@ -291,6 +308,9 @@ type FileInfo struct {
 	VersionID  string
 	ModifiedAt *time.Time
 	Trashed    bool
+	// SHA256 and ChecksumState of the current version.
+	SHA256        string
+	ChecksumState string
 }
 
 // Lookup finds a live node by path ("/a/b.txt", case-insensitive).
@@ -305,6 +325,7 @@ func (s *Server) Lookup(p string) (FileInfo, bool) {
 	if v := n.current(); v != nil {
 		fi.Data = v.content.bytes()
 		fi.VersionID = v.id
+		fi.SHA256, fi.ChecksumState = v.sha256, v.checksumState
 	}
 	return fi, true
 }
@@ -321,6 +342,7 @@ func (s *Server) Get(id string) (FileInfo, bool) {
 	if v := n.current(); v != nil {
 		fi.Data = v.content.bytes()
 		fi.VersionID = v.id
+		fi.SHA256, fi.ChecksumState = v.sha256, v.checksumState
 	}
 	return fi, true
 }
@@ -397,6 +419,52 @@ func (s *Server) Stats() Stats {
 		}
 	}
 	return st
+}
+
+// CorruptNextUploads makes the next n completed uploads behave as if
+// storage held other bytes than were sent: an upload the drive checks at
+// once is refused with checksum_mismatch; a larger one is published as
+// claimed and the checksum pass then reports "mismatch".
+func (s *Server) CorruptNextUploads(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.faults.corruptUploads = n
+}
+
+// RunChecksumPass checks every claimed version, as the real drive's worker
+// does: "verified" with the SHA-256 set, or "mismatch". Each result shows
+// up in the changes feed as an upsert. It returns how many it checked.
+func (s *Server) RunChecksumPass() int {
+	type job struct {
+		n *node
+		v *version
+	}
+	s.mu.Lock()
+	var jobs []job
+	for _, n := range s.nodes {
+		for _, v := range n.versions {
+			if v.checksumState == driveapi.ChecksumClaimed {
+				jobs = append(jobs, job{n, v})
+			}
+		}
+	}
+	s.mu.Unlock()
+	for _, j := range jobs {
+		sum := j.v.content.sha256() // outside the lock: it reads all the bytes
+		s.mu.Lock()
+		if j.v.checksumState == driveapi.ChecksumClaimed {
+			if sum == j.v.claimed && !j.v.corrupt {
+				j.v.checksumState, j.v.sha256 = driveapi.ChecksumVerified, sum
+				s.counts["checksum.verified"]++
+			} else {
+				j.v.checksumState = driveapi.ChecksumMismatch
+				s.counts["checksum.mismatch"]++
+			}
+			s.emitLocked(j.n.id, "")
+		}
+		s.mu.Unlock()
+	}
+	return len(jobs)
 }
 
 // RevokeAll revokes every token, linked devices and the built-in test token.
@@ -723,7 +791,8 @@ func (s *Server) toAPILocked(n *node) driveapi.Node {
 		}
 	}
 	if v := n.current(); v != nil {
-		out.CurrentVersion = &driveapi.Version{ID: v.id, Number: v.number, Size: v.content.size(), SHA256: v.sha256, CreatedAt: v.created}
+		out.CurrentVersion = &driveapi.Version{ID: v.id, Number: v.number, Size: v.content.size(), SHA256: v.sha256,
+			ChecksumState: v.checksumState, CreatedAt: v.created}
 		if v.modifiedAt != nil {
 			out.CurrentVersion.ModifiedAt = driveapi.NewTime(*v.modifiedAt)
 		}

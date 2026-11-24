@@ -60,7 +60,7 @@ func TestUploadSurvivesDropsAndExpiredURLs(t *testing.T) {
 	})
 	mt := time.Date(2026, 1, 2, 3, 4, 5, 6e6, time.UTC)
 	res, err := eng.Upload(ctxT(t), transfer.UploadRequest{TransferID: "t1", ParentID: fd.RootID(), Name: "big.bin",
-		Size: int64(len(data)), Src: bytes.NewReader(data), Conflict: driveapi.ConflictFail, Fingerprint: "fp-1", ModifiedAt: mt, Verify: true})
+		Size: int64(len(data)), Src: bytes.NewReader(data), Conflict: driveapi.ConflictFail, Fingerprint: "fp-1", ModifiedAt: mt})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,6 +125,10 @@ func TestResumeFromServerPartsAndReplayCompleted(t *testing.T) {
 	}
 	if fi, _ := fd.Lookup("/r.bin"); fi.Versions != 1 || !bytes.Equal(fi.Data, data) {
 		t.Fatalf("versions %d", fi.Versions)
+	}
+	// the resumed upload sent the whole file's SHA-256 too
+	if fi, _ := fd.Lookup("/r.bin"); fi.ChecksumState != driveapi.ChecksumVerified {
+		t.Fatalf("resumed upload checksum_state %q", fi.ChecksumState)
 	}
 }
 

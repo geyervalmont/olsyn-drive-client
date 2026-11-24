@@ -55,6 +55,7 @@ func (a *Agent) handler() http.Handler {
 	route("/v1/transfers/{id}/cancel", post(a.hTransferCancel))
 	route("/v1/held/{id}/discard", post(a.hHeldDiscard))
 	route("/v1/held/{id}/save-copy", post(a.hHeldSaveCopy))
+	route("/v1/held/{id}/reupload", post(a.hHeldReupload))
 	route("/v1/pause", post(a.hPause))
 	route("/v1/resume", post(a.hResume))
 	route("/v1/send", post(a.hSend))
@@ -276,6 +277,14 @@ func (a *Agent) hHeldDiscard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"discarded": true})
+}
+
+func (a *Agent) hHeldReupload(w http.ResponseWriter, r *http.Request) {
+	if err := a.opts.FS.ReuploadHeld(r.Context(), r.PathValue("id")); err != nil {
+		a.fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"queued": true})
 }
 
 func (a *Agent) hHeldSaveCopy(w http.ResponseWriter, r *http.Request) {

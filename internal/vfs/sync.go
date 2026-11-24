@@ -119,6 +119,8 @@ func (fs *FS) run(ctx context.Context, op journal.Op) {
 		fs.finish(op)
 	case errors.As(err, &held):
 		fs.hold(op, held.code, held.reason)
+	case errors.Is(err, transfer.ErrChecksumMismatch):
+		fs.hold(op, driveapi.CodeChecksumMismatch, driveapi.ChecksumMismatchReason)
 	case driveapi.IsPermanent(err):
 		e, _ := driveapi.AsError(err)
 		fs.hold(op, e.Code, driveapi.Reason(err))
@@ -316,7 +318,7 @@ func (fs *FS) execUpload(ctx context.Context, op *journal.Op) error {
 	size := h.Size()
 	req := transfer.UploadRequest{TransferID: strconv.FormatUint(op.Seq, 10), ParentID: p.ServerID, Name: e.Name,
 		Size: size, Src: h, ModifiedAt: e.MTime, Fingerprint: "olsyn-drive|" + key + "|" + strconv.FormatInt(size, 10),
-		UploadID: op.UploadID, Verify: size <= 64<<20, Conflict: driveapi.ConflictFail,
+		UploadID: op.UploadID, Conflict: driveapi.ConflictFail,
 		OnSession: func(id string) {
 			if op.UploadID != id {
 				op.UploadID = id
@@ -365,6 +367,13 @@ func (fs *FS) finishUpload(ctx context.Context, id, key string, n *driveapi.Node
 		cur.ServerID, cur.VersionID = n.ID, n.VersionID()
 		if n.CurrentVersion != nil {
 			cur.SHA256 = n.CurrentVersion.SHA256
+			if n.CurrentVersion.ChecksumState == driveapi.ChecksumClaimed {
+				// the drive checks large files later: remember that this
+				// PC sent this version, so a mismatch can be re-uploaded
+				if err := tx.SetMeta(claimKey(n.CurrentVersion.ID), cur.ID); err != nil {
+					return err
+				}
+			}
 		}
 		cur.CanWrite, cur.CanUpload, cur.CanDelete, cur.Sealed, cur.Managed = n.Can.Write, n.Can.Upload, n.Can.Delete, n.Sealed, n.IsManaged()
 		if cur.ContentKey == key {
@@ -561,7 +570,8 @@ func (fs *FS) Held() []Held {
 		if p == "" {
 			p = EncodeName(op.Name)
 		}
-		out = append(out, Held{Seq: op.Seq, Path: p, Kind: op.Kind, Code: op.HeldCode, Reason: op.Reason, Size: op.Size, Since: op.Queued})
+		out = append(out, Held{Seq: op.Seq, Path: p, Kind: op.Kind, Code: op.HeldCode, Reason: op.Reason, Size: op.Size, Since: op.Queued,
+			HasContent: fs.heldContent(op) != "", CanReupload: fs.canReupload(op)})
 	}
 	return out
 }

@@ -109,6 +109,10 @@ export class AgentClient {
   discardHeld(id: string) {
     return this.call<{ discarded: boolean }>('POST', '/v1/held/' + encodeURIComponent(id) + '/discard', {})
   }
+  /** Sends a held file again (only offered for a checksum mismatch). */
+  reuploadHeld(id: string) {
+    return this.call<{ queued: boolean }>('POST', '/v1/held/' + encodeURIComponent(id) + '/reupload', {})
+  }
   saveHeldCopy(id: string, destDir?: string) {
     return this.call<{ path: string }>('POST', '/v1/held/' + encodeURIComponent(id) + '/save-copy', destDir ? { dest_dir: destDir } : {})
   }

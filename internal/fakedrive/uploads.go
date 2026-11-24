@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/geyervalmont/olsyn-drive-client/internal/driveapi"
@@ -275,15 +276,31 @@ func (s *Server) uploadComplete(w http.ResponseWriter, r *http.Request) {
 			content.segs = append(content.segs, p.seg)
 		}
 	}
-	// Small files are hashed here; for large ones the client's hash is
-	// trusted, as the real drive checks those after the fact.
-	sha := req.SHA256
-	if u.size <= 64<<20 {
+	// Small files are hashed here; large ones with a client hash are
+	// published as claimed and checked by the checksum pass later.
+	if req.SHA256 != "" {
+		s.counts["upload.sha256_sent"]++
+	}
+	corrupt := s.faults.corruptUploads > 0
+	if corrupt {
+		s.faults.corruptUploads--
+	}
+	sha, state := "", ""
+	if u.size <= s.opts.VerifyMax {
 		sha = content.sha256()
-		if req.SHA256 != "" && sha != req.SHA256 {
-			fail(w, http.StatusUnprocessableEntity, driveapi.CodeChecksumMismatch, "checksum differs", nil)
-			return
+		if corrupt {
+			sha = strings.Repeat("0", 64) // what "storage" holds differs
 		}
+		if req.SHA256 != "" {
+			if sha != req.SHA256 {
+				s.counts["upload.checksum_mismatch"]++
+				fail(w, http.StatusUnprocessableEntity, driveapi.CodeChecksumMismatch, "checksum differs", nil)
+				return
+			}
+			state = driveapi.ChecksumVerified
+		}
+	} else if req.SHA256 != "" {
+		state = driveapi.ChecksumClaimed
 	}
 	n := s.nodes[u.nodeID]
 	if n == nil {
@@ -306,6 +323,13 @@ func (s *Server) uploadComplete(w http.ResponseWriter, r *http.Request) {
 	}
 	v := s.addBlobLocked(n, content, sha, u.fingerprint, mt)
 	v.id = u.versionID
+	v.checksumState = state
+	if state == driveapi.ChecksumClaimed {
+		v.claimed, v.corrupt = req.SHA256, corrupt
+		if d := s.opts.ChecksumPassDelay; d > 0 {
+			time.AfterFunc(d, func() { s.RunChecksumPass() })
+		}
+	}
 	delete(s.uploads, u.id)
 	s.completed[u.id] = n.id
 	s.counts["upload.complete"]++

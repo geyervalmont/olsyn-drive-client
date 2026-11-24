@@ -64,6 +64,13 @@ func (n *Node) IsManaged() bool {
 	return s != "" && s != "null" && s != "false"
 }
 
+// Checksum states of a version (absent when no SHA-256 was claimed).
+const (
+	ChecksumVerified = "verified" // the drive hashed the bytes and they match
+	ChecksumClaimed  = "claimed"  // a large file: the drive's own pass is still to come
+	ChecksumMismatch = "mismatch" // the drive's pass found other bytes: upload again
+)
+
 // Version is a file version.
 type Version struct {
 	ID            string    `json:"id"`

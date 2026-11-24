@@ -13,6 +13,8 @@
 //	POST /offline?on=1|0     drop every connection (API and storage), or stop doing so
 //	POST /revoke             revoke every token: the client must sign in again
 //	POST /approve            approve every waiting sign-in (instead of the link page)
+//	POST /corrupt?n=N        the next N completed uploads "arrive damaged" (checksum mismatch)
+//	POST /checksum-pass      run the drive's checksum pass on claimed large files now
 //	GET  /stats              what the drive holds and how often each thing happened
 package main
 
@@ -116,7 +118,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	} else {
 		_ = l.Close()
 	}
-	fd := fakedrive.New(fakedrive.Options{Addr: c.addr, DataDir: c.data, AutoApprove: c.autoApprove, PartSize: 16 << 20, SingleMax: 32 << 20})
+	fd := fakedrive.New(fakedrive.Options{Addr: c.addr, DataDir: c.data, AutoApprove: c.autoApprove, PartSize: 16 << 20, SingleMax: 32 << 20,
+		ChecksumPassDelay: 5 * time.Second})
 	defer fd.Close()
 	start := time.Now()
 	tree := seed(fd, c.bigFolder, c.virtualSize)
@@ -127,7 +130,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	defer srv.Close()
 
 	fmt.Fprintf(stdout, `Fake drive at %s (synthetic data only)
-Fault controls at http://%s (POST /deploy?seconds=N, /offline?on=1|0, /revoke, /approve; GET /stats)
+Fault controls at http://%s (POST /deploy?seconds=N, /offline?on=1|0, /revoke, /approve, /corrupt?n=N, /checksum-pass; GET /stats)
 Sign-ins: %s
 Point a dev build of the client at it:
   olsyn-drive agent --server %s
@@ -153,7 +156,7 @@ func faults(fd *fakedrive.Server, log *slog.Logger) http.Handler {
 		fmt.Fprintln(w, msg)
 	}
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		ok(w, "POST /deploy?seconds=N, POST /offline?on=1|0, POST /revoke, POST /approve, GET /stats")
+		ok(w, "POST /deploy?seconds=N, POST /offline?on=1|0, POST /revoke, POST /approve, POST /corrupt?n=N, POST /checksum-pass, GET /stats")
 	})
 	mux.HandleFunc("POST /deploy", func(w http.ResponseWriter, r *http.Request) {
 		secs, err := strconv.Atoi(r.URL.Query().Get("seconds"))
@@ -188,6 +191,19 @@ func faults(fd *fakedrive.Server, log *slog.Logger) http.Handler {
 		fd.ApproveLinks()
 		log.Info("sign-ins approved")
 		ok(w, "waiting sign-ins approved")
+	})
+	mux.HandleFunc("POST /corrupt", func(w http.ResponseWriter, r *http.Request) {
+		n, err := strconv.Atoi(r.URL.Query().Get("n"))
+		if err != nil || n < 0 || n > 1000 {
+			http.Error(w, "n must be 0 to 1000", http.StatusBadRequest)
+			return
+		}
+		fd.CorruptNextUploads(n)
+		log.Info("fault: corrupt uploads", "n", n)
+		ok(w, fmt.Sprintf("the next %d completed uploads arrive damaged", n))
+	})
+	mux.HandleFunc("POST /checksum-pass", func(w http.ResponseWriter, r *http.Request) {
+		ok(w, fmt.Sprintf("checked %d versions", fd.RunChecksumPass()))
 	})
 	mux.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

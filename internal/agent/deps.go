@@ -147,6 +147,9 @@ type FileSystem interface {
 	Retry(ctx context.Context, id string) (Transfer, error)
 	Cancel(ctx context.Context, id string) (Transfer, error)
 	DiscardHeld(ctx context.Context, id string) error
+	// ReuploadHeld queues a held file again (only a checksum mismatch with
+	// the bytes still on this PC; otherwise ErrNotRetryable).
+	ReuploadHeld(ctx context.Context, id string) error
 	SaveHeldCopy(ctx context.Context, id, destDir string) (string, error)
 	Pause(ctx context.Context) error
 	Resume(ctx context.Context) error

@@ -293,7 +293,7 @@ func (s *Sender) tryOne(ctx context.Context, spec SendSpec, folders *folderCache
 	}
 	req := UploadRequest{TransferID: j.f.ID, ParentID: parentID, Name: name, Size: before.Size(), Src: f,
 		Mime: mime.TypeByExtension(path.Ext(name)), Conflict: driveapi.ConflictFail, ModifiedAt: before.ModTime(),
-		Fingerprint: sendFingerprint(j.f.Local, before.Size(), before.ModTime()), PreCheck: true, Verify: true}
+		Fingerprint: sendFingerprint(j.f.Local, before.Size(), before.ModTime()), PreCheck: true}
 	res, err := s.Engine.Upload(ctx, req)
 	if driveapi.IsConflict(err) {
 		switch spec.Conflict {
@@ -313,6 +313,9 @@ func (s *Sender) tryOne(ctx context.Context, spec SendSpec, folders *folderCache
 		}
 	}
 	if err != nil {
+		if errors.Is(err, ErrChecksumMismatch) {
+			return SendHeld, driveapi.CodeChecksumMismatch, driveapi.ChecksumMismatchReason, nil
+		}
 		if driveapi.IsPermanent(err) || driveapi.IsConflict(err) {
 			return refusal(err)
 		}

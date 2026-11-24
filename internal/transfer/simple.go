@@ -87,11 +87,19 @@ func (s *Simple) emit(e Event) {
 // errRestart means the upload session is gone: start a new one.
 var errRestart = errors.New("transfer: upload session gone")
 
-// Upload implements Engine.
+// ErrChecksumMismatch means the drive received bytes whose SHA-256 differs
+// from this PC's, on the first attempt and again on a fresh upload. The
+// error also carries the drive's checksum_mismatch refusal. Hold the change:
+// retrying blindly would not help.
+var ErrChecksumMismatch = errors.New("transfer: the drive received different bytes from those sent, twice")
+
+// Upload implements Engine. Every upload carries the content's SHA-256 at
+// completion: the drive checks small files at once and larger ones in a
+// later pass (see FS checksum handling in vfs).
 func (s *Simple) Upload(ctx context.Context, req UploadRequest) (*UploadResult, error) {
 	ev := Event{Direction: Up, TransferID: req.TransferID, Name: req.Name, Total: req.Size}
 	var sum string
-	if req.PreCheck || req.Verify {
+	if req.PreCheck {
 		h, err := hashReaderAt(ctx, req.Src, req.Size)
 		if err != nil {
 			return nil, fmt.Errorf("transfer: hash %s: %w", req.TransferID, err)
@@ -118,9 +126,19 @@ func (s *Simple) Upload(ctx context.Context, req UploadRequest) (*UploadResult, 
 	s.emit(ev)
 
 	uploadID := req.UploadID
-	for restarts := 0; ; restarts++ {
+	restarts, mismatches := 0, 0
+	for {
 		res, err := s.uploadOnce(ctx, req, uploadID, sum, &ev)
+		if errors.Is(err, ErrChecksumMismatch) && mismatches == 0 {
+			// the drive got other bytes than ours: send it all again once,
+			// hashing again too (the first hash may have been the bad read)
+			mismatches++
+			s.log.WarnContext(ctx, "drive reported a checksum mismatch, uploading again", "transfer", req.TransferID)
+			uploadID, sum = "", ""
+			continue
+		}
 		if errors.Is(err, errRestart) && restarts < 2 {
+			restarts++
 			s.log.InfoContext(ctx, "upload session gone, starting again", "transfer", req.TransferID)
 			uploadID = ""
 			continue
@@ -143,10 +161,20 @@ func (s *Simple) uploadOnce(ctx context.Context, req UploadRequest, uploadID, su
 	if !req.ModifiedAt.IsZero() {
 		start.ModifiedAt = driveapi.NewTime(req.ModifiedAt)
 	}
-	complete := driveapi.CompleteUpload{SHA256: sum}
+	complete := driveapi.CompleteUpload{}
 	if !req.ModifiedAt.IsZero() {
 		complete.ModifiedAt = driveapi.NewTime(req.ModifiedAt)
 	}
+	// The SHA-256 is worked out in one sequential pass beside the part
+	// uploads (they read the same local file, in parallel and out of
+	// order), so it costs no extra time and holds 1 MiB, never the file.
+	// A resumed upload whose parts were sent before is hashed the same way.
+	hctx, hcancel := context.WithCancel(ctx)
+	hash := startHash(hctx, req.Src, req.Size, sum)
+	defer func() {
+		hcancel()
+		<-hash.done
+	}()
 	if uploadID != "" {
 		// A session from before a crash or restart: is it still open?
 		_, err := s.api.GetUpload(ctx, uploadID)
@@ -155,6 +183,9 @@ func (s *Simple) uploadOnce(ctx context.Context, req UploadRequest, uploadID, su
 			// open: starting again with the same fingerprint hands it back
 		case driveapi.IsNotFound(err) || driveapi.IsUploadGone(err):
 			// finished or reaped: completing again returns the file if it finished
+			if complete.SHA256, err = hash.wait(ctx); err != nil {
+				return nil, fmt.Errorf("transfer: hash %s: %w", req.TransferID, err)
+			}
 			node, cerr := s.api.Complete(ctx, uploadID, complete)
 			if cerr == nil {
 				return &UploadResult{Node: node, Resumed: true}, nil
@@ -199,6 +230,9 @@ func (s *Simple) uploadOnce(ctx context.Context, req UploadRequest, uploadID, su
 	if err != nil {
 		return nil, err
 	}
+	if complete.SHA256, err = hash.wait(ctx); err != nil {
+		return nil, fmt.Errorf("transfer: hash %s: %w", req.TransferID, err)
+	}
 	var node *driveapi.Node
 	for tries := 0; ; tries++ {
 		err = driveapi.Retry(ctx, s.opts.Backoff, s.opts.Attempts, func(ctx context.Context) error {
@@ -222,8 +256,11 @@ func (s *Simple) uploadOnce(ctx context.Context, req UploadRequest, uploadID, su
 				return nil, err
 			}
 		case errors.As(err, &e) && e.Code == driveapi.CodeChecksumMismatch:
-			_ = s.api.AbortUpload(ctx, tk.UploadID)
-			return nil, errRestart
+			// nothing was published: drop the session so a fresh one starts
+			if aerr := s.api.AbortUpload(ctx, tk.UploadID); aerr != nil && !driveapi.IsNotFound(aerr) {
+				s.log.WarnContext(ctx, "abort mismatched upload", "transfer", req.TransferID, "code", errCodeOf(aerr))
+			}
+			return nil, fmt.Errorf("%w: %w", ErrChecksumMismatch, err)
 		case driveapi.IsUploadGone(err):
 			return nil, errRestart
 		default:
@@ -480,6 +517,47 @@ func (s *Simple) downloadChunk(ctx context.Context, req DownloadRequest, off, n 
 		return got, &driveapi.Error{Op: "download", Err: io.ErrUnexpectedEOF}
 	}
 	return got, nil
+}
+
+// pendingHash is a SHA-256 being worked out in the background.
+type pendingHash struct {
+	done chan struct{}
+	sum  string
+	err  error
+}
+
+// startHash hashes src in a goroutine (or hands back known at once). The
+// goroutine stops when ctx ends.
+func startHash(ctx context.Context, src io.ReaderAt, size int64, known string) *pendingHash {
+	p := &pendingHash{done: make(chan struct{})}
+	if known != "" {
+		p.sum = known
+		close(p.done)
+		return p
+	}
+	go func() {
+		defer close(p.done)
+		p.sum, p.err = hashReaderAt(ctx, src, size)
+	}()
+	return p
+}
+
+// wait returns the hash once it is ready.
+func (p *pendingHash) wait(ctx context.Context) (string, error) {
+	select {
+	case <-p.done:
+		return p.sum, p.err
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+// errCodeOf names an error for a log line (a code, never content).
+func errCodeOf(err error) string {
+	if e, ok := driveapi.AsError(err); ok && e.Code != "" {
+		return e.Code
+	}
+	return "error"
 }
 
 func hashReaderAt(ctx context.Context, r io.ReaderAt, size int64) (string, error) {

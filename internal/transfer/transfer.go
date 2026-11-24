@@ -51,11 +51,10 @@ type UploadRequest struct {
 	// UploadID is a session started earlier (from the journal). The engine
 	// resumes it, or completes it again if it had finished.
 	UploadID string
-	// PreCheck asks the drive first and skips identical content.
+	// PreCheck asks the drive first and skips identical content. (The
+	// SHA-256 is always sent at completion: the drive checks files up to
+	// 64 MiB at once and records larger ones as claimed until its own pass.)
 	PreCheck bool
-	// Verify sends the SHA-256 at completion (the drive checks files up to
-	// 64 MiB; larger ones are recorded as claimed).
-	Verify bool
 	// OnSession is called with the drive's upload id as soon as it is
 	// known, so the caller can persist it for a resume after a crash.
 	OnSession func(uploadID string)

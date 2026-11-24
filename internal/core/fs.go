@@ -390,7 +390,11 @@ func (f *FS) handle(r *session, ev vfs.Event) {
 		f.signal(agent.FSEvent{Notification: &agent.Notification{Kind: "held", Title: "Couldn't save " + t.Name + " to the drive",
 			Body: t.Held.Message, Action: &agent.NotificationAction{Label: "Show", Open: agent.OpenAction{Target: "ui", Path: "transfers/held"}}}})
 	case vfs.EventReleased:
-		t := agent.Transfer{ID: mountID(ev.Seq), Direction: "up", Origin: "mount", State: agent.TransferCancelled, Name: path.Base(ev.Path),
+		state := agent.TransferCancelled
+		if ev.Reason == "reupload" {
+			state = agent.TransferWaiting // queued again
+		}
+		t := agent.Transfer{ID: mountID(ev.Seq), Direction: "up", Origin: "mount", State: state, Name: path.Base(ev.Path),
 			DrivePath: ev.Path, QueuedAt: ev.At.UTC()}
 		f.signal(agent.FSEvent{Held: &agent.HeldChange{Op: "removed", Item: t}})
 	case vfs.EventConflict:
@@ -492,7 +496,10 @@ func (f *FS) heldTransfer(r *session, seq uint64) *agent.Transfer {
 
 func heldToTransfer(f *FS, h vfs.Held) agent.Transfer {
 	actions := []string{"discard"}
-	if h.Kind == journal.OpUpload {
+	switch {
+	case h.CanReupload:
+		actions = []string{"reupload", "save_copy", "discard"}
+	case h.Kind == journal.OpUpload && h.HasContent:
 		actions = []string{"save_copy", "discard"}
 	}
 	return agent.Transfer{ID: mountID(h.Seq), Direction: "up", Origin: "mount", State: agent.TransferHeld, Name: path.Base(h.Path),
@@ -734,6 +741,30 @@ func (f *FS) DiscardHeld(ctx context.Context, id string) error {
 	}
 	if err := r.vfs.Discard(ctx, seq); err != nil {
 		return fmt.Errorf("discard held change: %w", err)
+	}
+	f.invalidate()
+	return nil
+}
+
+// ReuploadHeld queues a held file again: one the drive received with other
+// bytes than this PC sent (checksum mismatch). Other refusals would only be
+// refused again: they give agent.ErrNotRetryable.
+func (f *FS) ReuploadHeld(ctx context.Context, id string) error {
+	r, seq, err := f.heldSeq(id)
+	if err != nil {
+		return err
+	}
+	can := false
+	for _, h := range r.vfs.Held() {
+		if h.Seq == seq {
+			can = h.CanReupload
+		}
+	}
+	if !can {
+		return agent.ErrNotRetryable
+	}
+	if err := r.vfs.Reupload(ctx, seq); err != nil {
+		return fmt.Errorf("re-upload held change: %w", err)
 	}
 	f.invalidate()
 	return nil

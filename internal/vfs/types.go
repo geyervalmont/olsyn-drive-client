@@ -139,6 +139,11 @@ type Held struct {
 	Reason string
 	Size   int64
 	Since  time.Time
+	// HasContent: this PC still has the file's bytes (a copy can be saved).
+	HasContent bool
+	// CanReupload: the drive damaged what was sent (checksum mismatch) and
+	// this PC has the bytes: Reupload sends them again.
+	CanReupload bool
 }
 
 // Queued is a change waiting for, or on its way to, the drive.

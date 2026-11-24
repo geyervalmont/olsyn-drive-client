@@ -314,6 +314,10 @@ export class MockAgent {
   private seedHeld() {
     const specs: [FileSpec, Transfer['held']][] = [
       [
+        { name: 'Tower model.ifc', drivePath: '/Projects/Harbour Tower/Models/Tower model.ifc', size: 940 * MB, skip: null },
+        { code: 'checksum_mismatch', message: "The drive's copy of this file does not match what this PC sent. Re-upload it from this PC to replace the damaged copy.", since: this.iso(-1800), actions: ['reupload', 'save_copy', 'discard'] },
+      ],
+      [
         { name: 'Client issue set 07.pdf', drivePath: '/Projects/Harbour Tower/Client issue (managed)/Client issue set 07.pdf', size: 18 * MB, skip: null },
         { code: 'managed', message: 'Another app keeps this folder in step, so files cannot be added here by hand. Save a copy somewhere else, or ask whoever runs that app.', since: this.iso(-900), actions: ['save_copy', 'discard'] },
       ],
@@ -333,7 +337,7 @@ export class MockAgent {
       t.bytes_done = 0
       this.held.unshift(t.id)
     }
-    this.addActivity('held', "Couldn't save 3 files", 'The drive refused them. They are safe on this PC.', { label: 'Show', open: { target: 'ui', path: 'transfers/held' } })
+    this.addActivity('held', "Couldn't save 4 files", 'The drive refused them. They are safe on this PC.', { label: 'Show', open: { target: 'ui', path: 'transfers/held' } })
   }
 
   private seedConflict() {
@@ -841,6 +845,18 @@ export class MockAgent {
         this.removeHeld(t)
         this.addActivity('held', 'Discarded ' + t.name, 'The copy on this PC was deleted.', null)
         return ok({ discarded: true })
+      }
+      if (action === 'reupload') {
+        if (!t.held?.actions.includes('reupload')) return err(409, 'not_retryable', 'That file cannot be uploaded again from this PC.')
+        this.held = this.held.filter((x) => x !== id)
+        this.emit('held', { op: 'removed', item: this.publicTransfer({ ...t, state: 'waiting' }) })
+        t.state = 'waiting'
+        t.held = null
+        t.bytes_done = 0
+        this.queue.push(id)
+        this.workTotal += t.size
+        this.emit('transfer', this.publicTransfer(t))
+        return ok({ queued: true })
       }
       if (action === 'save-copy') {
         const dir = typeof b.dest_dir === 'string' && b.dest_dir ? b.dest_dir : localPath('C:', 'Users', 'ada', 'Downloads')

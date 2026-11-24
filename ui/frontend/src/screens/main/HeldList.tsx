@@ -1,5 +1,6 @@
 // Files the drive refused for good. Each says what happened in plain words and
-// offers what can be done: save a copy somewhere else, or discard it.
+// offers what can be done: upload it again (when the drive received damaged
+// bytes), save a copy somewhere else, or discard it.
 
 import { useState } from 'react'
 import type { Transfer } from '../../api/types'
@@ -21,6 +22,7 @@ const reasonTitle: Record<string, string> = {
   legal_hold: 'On legal hold',
   quota_exceeded: 'Folder is full',
   invalid_name: 'Name not allowed',
+  checksum_mismatch: 'Damaged on the way',
 }
 
 export function heldReasonTitle(code: string): string {
@@ -64,6 +66,11 @@ function HeldRow({ t, onDiscard }: { t: Transfer; onDiscard: () => void }) {
       const result = await client.saveHeldCopy(t.id, dir)
       toast({ icon: 'check', title: 'Saved a copy of ' + t.name, body: result.path, action: { label: 'Show', run: () => void client.open({ target: 'folder', path: dir }) } })
     })
+  const reupload = () =>
+    run('reupload', async () => {
+      await client.reuploadHeld(t.id)
+      toast({ icon: 'refresh', title: 'Uploading ' + t.name + ' again' })
+    })
   return (
     <article className="held-row" aria-label={t.name + ': ' + (held ? heldReasonTitle(held.code) : 'held')}>
       <span className="trow-icon state-held" aria-hidden="true">
@@ -89,6 +96,11 @@ function HeldRow({ t, onDiscard }: { t: Transfer; onDiscard: () => void }) {
         {error && <p className="trow-error" role="alert">{error.message}</p>}
       </div>
       <div className="held-actions">
+        {actions.includes('reupload') && (
+          <Button size="s" variant="primary" icon="refresh" pending={pending === 'reupload'} onClick={() => void reupload()}>
+            Re-upload
+          </Button>
+        )}
         {actions.includes('save_copy') && (
           <Button size="s" variant="secondary" icon="copy" pending={pending === 'save'} onClick={() => void saveCopy()}>
             Save a copy…

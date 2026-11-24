@@ -377,6 +377,11 @@ func (t *Tx) SetMeta(key, value string) error {
 	return t.tx.Bucket(bMeta).Put([]byte(key), []byte(value))
 }
 
+// DeleteMeta removes a metadata value.
+func (t *Tx) DeleteMeta(key string) error {
+	return t.tx.Bucket(bMeta).Delete([]byte(key))
+}
+
 // Convenience wrappers for single operations.
 
 // Get reads an entry.

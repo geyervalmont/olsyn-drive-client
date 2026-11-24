@@ -150,6 +150,7 @@ func (f *fakeFS) Cancel(ctx context.Context, id string) (Transfer, error) {
 	return Transfer{}, ErrNotFound
 }
 func (f *fakeFS) DiscardHeld(ctx context.Context, id string) error { return ErrNotHeld }
+func (f *fakeFS) ReuploadHeld(ctx context.Context, id string) error { return ErrNotHeld }
 func (f *fakeFS) SaveHeldCopy(ctx context.Context, id, dest string) (string, error) {
 	return "", ErrNotHeld
 }

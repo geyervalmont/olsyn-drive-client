@@ -190,8 +190,12 @@ when unknown. `files_left` = active + waiting.
   (gave up after retries; `can.retry`) | `cancelled`.
 - `error`: `null` or `{code, message, retry_at}` (the last error; a waiting transfer can carry one while it backs off).
 - `held`: `null` or `{code, message, since, actions}`: `code` is the drive's refusal (`sealed`, `legal_hold`,
-  `managed`, `quota_exceeded`, `invalid_name`, `forbidden`, `writes_paused` is never held), `message` is plain words
-  ("This folder is sealed, so new files can't be added."), `actions` ⊆ `["save_copy", "discard"]`.
+  `managed`, `quota_exceeded`, `invalid_name`, `forbidden`, `writes_paused` is never held) or
+  `checksum_mismatch` (the drive received other bytes than this PC sent: refused at completion twice, or flagged
+  later by the drive's checksum pass for a large file), `message` is plain words
+  ("This folder is sealed, so new files can't be added."), `actions` ⊆ `["reupload", "save_copy", "discard"]`
+  in that order of preference. `reupload` is offered only for `checksum_mismatch` while this PC still has the
+  bytes; `save_copy` only while it has them.
 - `conflict_copy`: when the drive's file changed under us, the drive path our copy was saved as.
 - `can`: which of `POST /v1/transfers/{id}/retry|cancel` would succeed now. Mount uploads are never
   cancellable (that would lose a saved file); use discard on a held item instead.
@@ -286,6 +290,9 @@ approval the token goes to the OS credential store and nowhere else, then `conne
 `POST /v1/transfers/{id}/cancel` → 200 `Transfer`. 409 `not_cancellable` (mount uploads, finished transfers).
 
 `POST /v1/held/{id}/discard` → 200 `{"discarded": true}`: the local copy is deleted. 409 `not_held`.
+`POST /v1/held/{id}/reupload` → 200 `{"queued": true}`: the item leaves the held list (`held` event `removed`)
+and is queued again as a `waiting` transfer that replaces the damaged version. 409 `not_held`; 409
+`not_retryable` when `reupload` is not among the item's `actions`.
 `POST /v1/held/{id}/save-copy` body `{"dest_dir": "C:\\Users\\ada\\Documents"}` (optional; default the OS
 Downloads folder) → 200 `{"path": "C:\\Users\\ada\\Downloads\\Level 3.rvt"}`; the item leaves the held list.
 A name clash gets " (2)". 404 `local_not_found` when `dest_dir` does not exist.

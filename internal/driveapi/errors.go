@@ -170,6 +170,10 @@ var permanentCodes = map[string]string{
 	CodeInvalidModifiedAt: "The file's modified time is outside what the drive accepts.",
 }
 
+// ChecksumMismatchReason is the plain words for a file the drive received
+// with other bytes than this PC sent.
+const ChecksumMismatchReason = "The drive received different bytes from those this PC sent, so the upload was not kept. Nothing on the drive was replaced. Re-upload to try again."
+
 // IsPermanent reports a refusal that will never succeed by retrying:
 // managed, sealed, forbidden, legal hold, retention period, quota,
 // invalid name, archived (and other 4xx that are not conflicts, auth or
@@ -279,6 +283,8 @@ func Reason(err error) string {
 		return s
 	}
 	switch {
+	case e.Code == CodeChecksumMismatch:
+		return ChecksumMismatchReason
 	case IsConflict(err):
 		if e.Code == CodeVersionConflict {
 			return "Someone else saved a newer version of this file."

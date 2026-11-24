@@ -65,11 +65,18 @@ func (fs *FS) pollChanges(ctx context.Context) error {
 			return fs.idx.SetMeta(metaCursor, strconv.FormatInt(p.Next, 10))
 		}
 		var relist []string
+		var damaged []mismatch
 		fs.treeMu.Lock()
 		err = fs.idx.Update(func(tx *index.Tx) error {
+			relist, damaged = relist[:0], damaged[:0]
 			for i := range p.Changes {
 				if err := fs.applyChange(tx, &p.Changes[i], &relist); err != nil {
 					return err
+				}
+				if m, err := checksumOutcome(tx, &p.Changes[i]); err != nil {
+					return err
+				} else if m != nil {
+					damaged = append(damaged, *m)
 				}
 			}
 			return tx.SetMeta(metaCursor, strconv.FormatInt(p.Next, 10))
@@ -80,6 +87,9 @@ func (fs *FS) pollChanges(ctx context.Context) error {
 		}
 		for _, id := range relist {
 			fs.relist(id)
+		}
+		for _, m := range damaged {
+			fs.holdMismatch(m)
 		}
 		if !p.HasMore {
 			return nil
