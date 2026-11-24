@@ -19,7 +19,7 @@ type bulkRun struct {
 	// requests of the upload routes, and of pre-checks and folder
 	// making, that waited because the drive had asked to wait
 	uploadsHeld, otherHeld int64
-	listings              int // children listings
+	listings               int // children listings
 }
 
 // bulkCopy writes files small files (100 to a folder) through the file
@@ -60,7 +60,7 @@ func bulkCopy(t *testing.T, files int, stream bool) bulkRun {
 	r := bulkRun{took: time.Since(t0), changes: e.fd.Count("changes"), changes429: e.fd.Count("changes.429"),
 		uploadStart: e.fd.Count("upload.start"), uploadsHeld: e.api.PaceStats(driveapi.ClassUpload).Held,
 		otherHeld: e.api.PaceStats(driveapi.ClassOther).Held + e.api.PaceStats(driveapi.ClassCheck).Held,
-		listings: e.fd.Count("children")}
+		listings:  e.fd.Count("children")}
 	r.perMinute = float64(r.changes) / max(r.took.Minutes(), 1.0/60)
 	if n := len(e.fs.Held()); n != 0 {
 		t.Fatalf("%d changes held: %+v", n, e.fs.Held()[0])
