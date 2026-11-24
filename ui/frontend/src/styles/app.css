@@ -839,6 +839,11 @@ a {
 .trow-sub.tone-warn {
   color: var(--warn);
 }
+/* The reason a row is not plain "done" is written out in full (it wraps), never only in a tooltip. */
+.trow-why {
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
 .trow-conflict {
   display: flex;
   align-items: center;

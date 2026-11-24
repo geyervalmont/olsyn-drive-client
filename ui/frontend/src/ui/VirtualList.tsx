@@ -7,6 +7,9 @@ import { useCallback, useEffect, useRef, type KeyboardEvent, type ReactNode } fr
 
 export const VIRTUALISE_ABOVE = 60
 
+/** Rows taller than rowHeight (a reason written out on two lines) are measured where the browser can. */
+const canMeasure = typeof ResizeObserver !== 'undefined'
+
 export function VirtualList<T>({
   items,
   rowHeight,
@@ -93,7 +96,12 @@ export function VirtualList<T>({
         {virtual ? (
           <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
             {virtualizer.getVirtualItems().map((v) => (
-              <div key={v.key} style={{ position: 'absolute', top: 0, left: 0, right: 0, height: rowHeight, transform: 'translateY(' + v.start + 'px)' }}>
+              <div
+                key={v.key}
+                data-index={v.index}
+                ref={canMeasure ? virtualizer.measureElement : undefined}
+                style={{ position: 'absolute', top: 0, left: 0, right: 0, minHeight: rowHeight, transform: 'translateY(' + v.start + 'px)' }}
+              >
                 {row(items[v.index], v.index)}
               </div>
             ))}

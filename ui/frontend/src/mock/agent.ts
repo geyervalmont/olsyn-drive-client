@@ -330,6 +330,8 @@ export class MockAgent {
       if (f.skip) {
         t.state = 'skipped'
         t.skipped_reason = f.skip
+      } else if (i === 2) {
+        t.note = 'date_not_kept' // the drive refused its modified time (out of range)
       }
       this.history.push(t.id)
     })

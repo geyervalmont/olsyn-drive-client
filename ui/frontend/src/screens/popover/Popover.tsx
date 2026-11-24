@@ -95,7 +95,15 @@ export function Popover() {
                     <Icon name={t.state === 'done' ? 'check' : t.state === 'skipped' ? 'skip' : 'alert'} size={14} />
                   </span>
                   <FileName name={t.name} className="pop-name" />
-                  <span className="pop-meta">{t.state === 'skipped' ? 'Already there' : formatWhen(t.finished_at, now)}</span>
+                  <span className={'pop-meta' + (t.conflict_copy || t.note === 'date_not_kept' ? ' tone-warn' : '')}>
+                    {t.state === 'skipped'
+                      ? 'Already there'
+                      : t.conflict_copy
+                        ? 'Kept as a second copy'
+                        : t.note === 'date_not_kept'
+                          ? 'Uploaded, date not kept'
+                          : formatWhen(t.finished_at, now)}
+                  </span>
                 </li>
               ))}
             </ul>

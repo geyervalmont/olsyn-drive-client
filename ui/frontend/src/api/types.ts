@@ -180,6 +180,8 @@ export interface Held {
   actions: HeldAction[]
 }
 
+export type TransferNote = 'date_not_kept'
+
 export interface Transfer {
   id: string
   direction: Direction
@@ -201,6 +203,8 @@ export interface Transfer {
   held: Held | null
   skipped_reason: 'already_there' | 'junk' | string | null
   conflict_copy: string | null
+  /** Qualifies a done upload: "date_not_kept" when the drive took the file without its modified time. Absent when not set. */
+  note?: TransferNote | string | null
   batch_id: string | null
   can: { retry: boolean; cancel: boolean }
 }
