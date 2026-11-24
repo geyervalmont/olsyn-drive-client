@@ -431,10 +431,15 @@ func (fs *FS) fetch(ctx context.Context, on *openNode, dst *cache.Handle, e *ind
 			if !overlaps(r, must) {
 				continue // read-ahead only
 			}
+			if !errors.Is(err, context.Canceled) {
+				// the application only gets a status code: the reason goes in the log
+				fs.log.Warn("vfs: read from the drive failed", "node", e.ServerID, "version", e.VersionID, "offset", r.Off, "length", r.Len, "size", e.Size, "err", err)
+			}
 			return classify("read", e.Name, err)
 		}
 		fs.noteOK()
 		if err := dst.Fill(r.Off, buf.Buf); err != nil {
+			fs.log.Warn("vfs: keeping downloaded bytes failed", "node", e.ServerID, "offset", r.Off, "length", len(buf.Buf), "size", e.Size, "err", err)
 			return classify("read", e.Name, err)
 		}
 	}
