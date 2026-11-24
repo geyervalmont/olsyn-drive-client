@@ -229,7 +229,7 @@ func (s *Server) Close() {
 }
 
 // Count returns how often a thing happened: "upload.start", "upload.complete",
-// "part.put", "download", "children", "changes", "folder.create", "patch", "trash".
+// "part.put" (and "part.put.multipart" for large files' parts), "download", "children", "changes", "folder.create", "patch", "trash".
 func (s *Server) Count(name string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -356,6 +356,57 @@ func (s *Server) List(folderID string) []string {
 		names = append(names, c.name)
 	}
 	return names
+}
+
+// TreeEntry is one live node below a folder, as the fault controls' /tree
+// lists it for scripts that compare the drive with a mounted copy.
+type TreeEntry struct {
+	Path     string `json:"path"` // below the folder, "/"-separated
+	Kind     string `json:"kind"` // file or folder
+	ID       string `json:"id"`
+	Size     int64  `json:"size"`
+	Versions int    `json:"versions"`
+	SHA256   string `json:"sha256,omitempty"`
+}
+
+// Tree lists every live node below the folder at path p, folders before
+// their contents. Hashes not yet known are worked out (synthetic data only).
+func (s *Server) Tree(p string) ([]TreeEntry, bool) {
+	s.mu.Lock()
+	top := s.resolveLocked(p)
+	if top == nil || top.kind != driveapi.KindFolder {
+		s.mu.Unlock()
+		return nil, false
+	}
+	type pending struct {
+		e TreeEntry
+		v *version
+	}
+	var out []pending
+	var walk func(id, prefix string)
+	walk = func(id, prefix string) {
+		for _, c := range s.childrenLocked(id) {
+			e := TreeEntry{Path: prefix + c.name, Kind: c.kind, ID: c.id, Versions: len(c.versions)}
+			v := c.current()
+			if v != nil {
+				e.Size, e.SHA256 = v.content.size(), v.sha256
+			}
+			out = append(out, pending{e, v})
+			if c.kind == driveapi.KindFolder {
+				walk(c.id, e.Path+"/")
+			}
+		}
+	}
+	walk(top.id, "")
+	s.mu.Unlock()
+	entries := make([]TreeEntry, len(out))
+	for i, p := range out {
+		if p.e.Kind == driveapi.KindFile && p.e.SHA256 == "" && p.v != nil {
+			p.e.SHA256 = p.v.content.sha256()
+		}
+		entries[i] = p.e
+	}
+	return entries, true
 }
 
 // PendingUploads is how many uploads are unfinished.

@@ -152,6 +152,28 @@ Requests the window makes that fail inside the WebView (before reaching the app)
 `page request failed`, and requests the agent refuses as `agent refused a request` (method, path, status and
 error code; never a body). Run the app with `olsyn-drive.exe ui --debug` to see Wails' own lines as well.
 
+## Robustness checks
+
+`scripts\windows\robustness.ps1` runs the agent of a dev build (no desktop app) against the fake drive and checks
+what must survive real use. Run it in the desktop session from Windows PowerShell 5.1, with about 4 GB free:
+
+```bat
+powershell -ExecutionPolicy Bypass -File scripts\windows\robustness.ps1 -Bin C:\OlsynTest
+```
+
+Without `-Server` it starts `fakedrive-server.exe --auto-approve` itself; with `-Server` (and `-Faults`, default the
+next port) it uses one already running. It signs in, installs WinFsp if needed (approve the prompt), mounts, and
+then: (a) copies 500 files and 1 GiB, kills the agent mid-upload with `taskkill /f`, restarts it and checks with
+the fake drive's `part.put.multipart` counter that the large file resumed from its finished parts; (b) takes the
+fake drive offline for 60 s during a copy and checks reads of uncached data fail or answer within 2 s, writes go
+on into the cache, and the backlog drains; (c) checks sign-out with unsent files is refused without
+confirmation; (d) quits and restarts with unsent files; (e) runs 1,000 creates, overwrites, renames, deletes and
+new folders and compares the drive (`GET /tree` on the fault controls) with the mounted copy, file by file and
+hash by hash; (f) reads the tail of the generated 5 GiB file and 1 GiB sequentially, printing the throughput;
+(g) saves a document the way Word does while another process holds it open and checks the drive kept the same
+file with one more version. `PASS`, `FAIL` and `NOTE` lines go to `%TEMP%\olsyn-robustness\result.txt`
+(`-Result` to change it); the exit code is the number of failed checks.
+
 ## Against a real drive
 
 Use the release build (`make windows`), which only connects to https://drive.olsyn.com, and a test account with a

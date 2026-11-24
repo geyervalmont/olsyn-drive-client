@@ -16,6 +16,7 @@
 //	POST /corrupt?n=N        the next N completed uploads "arrive damaged" (checksum mismatch)
 //	POST /checksum-pass      run the drive's checksum pass on claimed large files now
 //	GET  /stats              what the drive holds and how often each thing happened
+//	GET  /tree?path=/F       every file and folder below /F: path, kind, id, size, versions, sha256
 package main
 
 import (
@@ -156,7 +157,7 @@ func faults(fd *fakedrive.Server, log *slog.Logger) http.Handler {
 		fmt.Fprintln(w, msg)
 	}
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		ok(w, "POST /deploy?seconds=N, POST /offline?on=1|0, POST /revoke, POST /approve, POST /corrupt?n=N, POST /checksum-pass, GET /stats")
+		ok(w, "POST /deploy?seconds=N, POST /offline?on=1|0, POST /revoke, POST /approve, POST /corrupt?n=N, POST /checksum-pass, GET /stats, GET /tree?path=/F")
 	})
 	mux.HandleFunc("POST /deploy", func(w http.ResponseWriter, r *http.Request) {
 		secs, err := strconv.Atoi(r.URL.Query().Get("seconds"))
@@ -204,6 +205,22 @@ func faults(fd *fakedrive.Server, log *slog.Logger) http.Handler {
 	})
 	mux.HandleFunc("POST /checksum-pass", func(w http.ResponseWriter, r *http.Request) {
 		ok(w, fmt.Sprintf("checked %d versions", fd.RunChecksumPass()))
+	})
+	mux.HandleFunc("GET /tree", func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Query().Get("path")
+		if p == "" {
+			p = "/"
+		}
+		entries, found := fd.Tree(p)
+		if !found {
+			http.Error(w, "no folder at "+p, http.StatusNotFound)
+			return
+		}
+		if entries == nil {
+			entries = []fakedrive.TreeEntry{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(entries)
 	})
 	mux.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

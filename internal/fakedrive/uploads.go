@@ -146,6 +146,9 @@ func (s *Server) storagePut(w http.ResponseWriter, r *http.Request) {
 		s.faults.dropPuts--
 		drop = s.faults.dropPutAfter
 	}
+	if u != nil && u.method == driveapi.MethodMultipart {
+		s.counts["part.put.multipart"]++ // large files' parts alone, for resume checks
+	}
 	s.mu.Unlock()
 	storageErr := func(status int, code string) {
 		w.Header().Set("Content-Type", "application/xml")
