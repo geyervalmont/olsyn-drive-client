@@ -4,6 +4,25 @@ This is an early, **unsigned** test version of Olsyn Drive. It is not signed wit
 yet, so Windows does not know who made it and may warn you or remove it. Nothing is wrong with your PC and
 nothing is lost if that happens. The signed release will not need any of the steps below.
 
+## Short version: do this in order
+
+Windows Security removed this unsigned pre-release in our own tests, a few minutes after it was installed, and it
+also removes the downloaded file. So the exclusion comes first, and the download goes into the excluded folder.
+
+1. **Make the folder.** Press Win+R, paste `%LOCALAPPDATA%\Programs` and press Enter. Create a new folder there
+   named exactly `Olsyn Drive`.
+2. **Exclude that one folder.** Windows Security > Virus & threat protection > Manage settings > Exclusions >
+   Add or remove exclusions > Add an exclusion > Folder, and pick the `Olsyn Drive` folder you just made.
+   Only that folder: never Downloads, never the cache, never W:, never a whole disk.
+3. **Download into it.** Save `OlsynDrive.exe` into that `Olsyn Drive` folder, not into Downloads, and keep its name.
+4. **Run it from there.** Double-click it. On "Windows protected your PC" choose More info, then Run anyway. Click OK
+   to install, then Sign in and approve in your browser. The first time, it downloads the WinFsp driver from the
+   WinFsp project and asks once for administrator approval to install it. The drive then appears as W:.
+
+**If Windows Security has already removed it:** nothing is lost. Files waiting to upload stay in
+`%LOCALAPPDATA%\Olsyn Drive` and carry on after you install again. Check the exclusion in step 2, then either
+Windows Security > Protection history > the item > Actions > Restore, or download again into the folder, and run it.
+
 ## The easy way: the install wizard
 
 A short guided installer runs in PowerShell. It explains each step, creates Olsyn Drive's program folder, copies
