@@ -130,6 +130,10 @@ export class AgentClient {
   batches() {
     return this.call<{ items: Batch[] }>('GET', '/v1/batches')
   }
+  /** Cancels a batch midway: what is not on the drive yet is not sent (agent 1.2). */
+  cancelBatch(id: string) {
+    return this.call<Batch>('POST', '/v1/batches/' + encodeURIComponent(id) + '/cancel', {})
+  }
 
   // Settings
   settings() {

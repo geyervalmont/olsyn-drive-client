@@ -780,6 +780,7 @@ export class MockAgent {
       case 'GET /v1/licences':
         return ok({ text: 'Olsyn Drive: open-source notices (mock).' })
     }
+    if (/^\/v1\/batches\/[^/]+\/cancel$/.test(path) && key.startsWith('POST ')) return err(404, 'not_found', 'No such batch.')
     const m = /^\/v1\/(transfers|held)\/([^/]+)\/([a-z-]+)$/.exec(path)
     if (m && key.startsWith('POST ')) return this.itemAction(m[1], decodeURIComponent(m[2]), m[3], b)
     if (path.startsWith('/v1/')) return err(404, 'not_found', 'Unknown endpoint.')

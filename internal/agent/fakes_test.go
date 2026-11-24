@@ -179,6 +179,10 @@ func (f *fakeFS) Send(ctx context.Context, req SendRequest) (SendResult, error) 
 
 func (f *fakeFS) Batches() []Batch { return nil }
 
+func (f *fakeFS) CancelBatch(ctx context.Context, id string) (Batch, error) {
+	return Batch{}, ErrNotFound
+}
+
 func (f *fakeFS) CacheUsage(ctx context.Context) (CacheUsage, error) {
 	return CacheUsage{UsedBytes: 5 << 20, UnsentBytes: 1 << 20, UnsentFiles: 2}, nil
 }

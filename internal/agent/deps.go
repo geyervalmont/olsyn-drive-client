@@ -149,6 +149,9 @@ type FileSystem interface {
 	Transfers(ctx context.Context, q TransferQuery) (TransferPage, error)
 	Retry(ctx context.Context, id string) (Transfer, error)
 	Cancel(ctx context.Context, id string) (Transfer, error)
+	// CancelBatch cancels a send batch midway: what is not on the drive
+	// yet is not sent.
+	CancelBatch(ctx context.Context, id string) (Batch, error)
 	DiscardHeld(ctx context.Context, id string) error
 	// ReuploadHeld queues a held file again (only a checksum mismatch with
 	// the bytes still on this PC; otherwise ErrNotRetryable).

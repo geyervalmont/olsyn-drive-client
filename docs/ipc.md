@@ -318,7 +318,11 @@ approval the token goes to the OS credential store and nowhere else, then `conne
 - History: done/skipped/failed keep the last 1,000 and 7 days, whichever is fewer.
 
 `POST /v1/transfers/{id}/retry` → 200 `Transfer`. 409 `not_retryable`.
-`POST /v1/transfers/{id}/cancel` → 200 `Transfer`. 409 `not_cancellable` (mount uploads, finished transfers).
+`POST /v1/transfers/{id}/cancel` → 200 `Transfer` (state `cancelled`). 409 `not_cancellable` (mount uploads,
+finished transfers). A send file is cancelled whatever it is doing: queued, found while the queue is full, waiting to
+try again, paused or going up. It leaves the active and waiting lists at once and is in the history as `cancelled`
+(`error.code` `cancelled`); nothing of it is sent later, an upload under way is aborted on the drive, and a batch
+carried on after a restart leaves it out. Its batch no longer counts it (`files`, `bytes`).
 
 `POST /v1/held/{id}/discard` → 200 `{"discarded": true}`: the local copy is deleted. 409 `not_held`.
 `POST /v1/held/{id}/reupload` → 200 `{"queued": true}`: the item leaves the held list (`held` event `removed`)
@@ -363,6 +367,11 @@ start; files that reached the drive before then count as skipped.
 `state`: `scanning` (walking the folders) → `sending` → `done` (every file is on the drive, skipped, held or failed),
 `failed` (`error` says why: the drive folder went away, the device was signed out) or `cancelled`. The batch's
 files are ordinary transfers: retry, cancel and the held list work on them as on any other.
+
+`POST /v1/batches/{id}/cancel` (agent 1.2) → 200 `Batch`: cancels a batch midway. Every file not yet on the drive
+is cancelled at once as above (in the history as `cancelled`), uploads under way are aborted on the drive, the walk
+stops, and the batch ends `cancelled` (a `batch` event follows); it does not carry on after a restart. Files
+already on the drive stay. 404 `not_found`, 409 `not_cancellable` (the batch had finished).
 
 ### Settings
 

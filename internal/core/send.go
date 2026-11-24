@@ -34,24 +34,29 @@ type sends struct {
 	r   *session
 	dir string
 
-	mu       sync.Mutex
-	seq      int
-	batches  map[string]*batchRun
-	files    map[string]*sendFile // waiting and active, by transfer id
-	held     []agent.Transfer     // oldest first
-	stopping bool                 // the session is stopping: runs end unfinished
+	mu      sync.Mutex
+	seq     int
+	batches map[string]*batchRun
+	files   map[string]*sendFile // waiting and active, by transfer id
+	// dropped: files cancelled (and recorded) before their run reported
+	// them; their late result is ignored
+	dropped  map[string]bool
+	held     []agent.Transfer // oldest first
+	stopping bool             // the session is stopping: runs end unfinished
 	wg       sync.WaitGroup
 }
 
 type batchRun struct {
-	b       agent.Batch
-	spec    savedSend
-	cancel  context.CancelFunc
-	doneB   int64            // bytes of files done
-	live    map[string]int64 // bytes sent of active files
-	sampleT time.Time
-	sampleB int64
-	running bool
+	b      agent.Batch
+	spec   savedSend
+	cancel context.CancelCauseFunc
+	// cancelled: the person cancelled the whole batch
+	cancelled bool
+	doneB     int64            // bytes of files done
+	live      map[string]int64 // bytes sent of active files
+	sampleT   time.Time
+	sampleB   int64
+	running   bool
 }
 
 type sendFile struct {
@@ -70,10 +75,14 @@ type savedSend struct {
 	Conflict          string      `json:"conflict"`
 	IncludeOnlineOnly bool        `json:"include_online_only"`
 	Batch             agent.Batch `json:"batch"`
+	// Cancelled lists local files the person cancelled: a run carried on
+	// after a restart leaves them out
+	Cancelled []string `json:"cancelled,omitempty"`
 }
 
 func newSends(f *FS, r *session) *sends {
-	return &sends{f: f, r: r, dir: filepath.Join(r.dirs.state, "sends"), batches: map[string]*batchRun{}, files: map[string]*sendFile{}}
+	return &sends{f: f, r: r, dir: filepath.Join(r.dirs.state, "sends"), batches: map[string]*batchRun{}, files: map[string]*sendFile{},
+		dropped: map[string]bool{}}
 }
 
 // load reads saved batches and runs the unfinished ones again.
@@ -115,6 +124,7 @@ func (s *sends) save(br *batchRun) {
 	s.mu.Lock()
 	sv := br.spec
 	sv.Batch = br.b
+	sv.Cancelled = slices.Clone(sv.Cancelled)
 	s.mu.Unlock()
 	data, err := json.Marshal(sv)
 	if err != nil {
@@ -248,9 +258,13 @@ func countLocal(ctx context.Context, paths []string, online bool) (files int, by
 
 // start runs a batch (or part of one: a retried file) in the background.
 func (s *sends) start(ctx context.Context, br *batchRun, sources []string, parentID, parentPath, runID string) {
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancelCause(ctx)
 	s.mu.Lock()
 	br.cancel, br.running = cancel, true
+	skip := map[string]bool{}
+	for _, p := range br.spec.Cancelled {
+		skip[p] = true
+	}
 	if br.live == nil {
 		br.live = map[string]int64{}
 	}
@@ -260,12 +274,13 @@ func (s *sends) start(ctx context.Context, br *batchRun, sources []string, paren
 	br.b.FinishedAt, br.b.Error = nil, nil
 	s.mu.Unlock()
 	spec := transfer.SendSpec{BatchID: runID, Sources: sources, ParentID: parentID, ParentPath: parentPath,
-		Conflict: br.spec.Conflict, IncludeOnlineOnly: br.spec.IncludeOnlineOnly}
+		Conflict: br.spec.Conflict, IncludeOnlineOnly: br.spec.IncludeOnlineOnly,
+		Skip: func(local string) bool { return skip[local] }}
 	sender := &transfer.Sender{API: s.r.api, Engine: s.r.eng, Backoff: s.f.opts.Backoff, Logger: s.f.log}
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		defer cancel()
+		defer cancel(nil)
 		err := sender.Send(ctx, spec, s.report(br))
 		s.finish(br, ctx, err)
 	}()
@@ -278,6 +293,11 @@ func (s *sends) report(br *batchRun) transfer.SendReport {
 				Name: path.Base(sf.DrivePath), LocalPath: sf.Local, DrivePath: sf.DrivePath, Size: sf.Size,
 				QueuedAt: time.Now().UTC(), BatchID: &br.b.ID}
 			s.mu.Lock()
+			if br.cancelled {
+				s.dropped[sf.ID] = true // found as the batch was cancelled: not counted
+				s.mu.Unlock()
+				return
+			}
 			br.b.Files++
 			br.b.Bytes += sf.Size
 			if sf.Local != "" {
@@ -294,8 +314,8 @@ func (s *sends) report(br *batchRun) transfer.SendReport {
 			defer s.mu.Unlock()
 			it := s.files[sf.ID]
 			if it == nil {
-				cancel()
-				return nil
+				cancel() // cancelled while queued: nothing is sent
+				return ctx
 			}
 			it.cancel = cancel
 			if it.cancelled {
@@ -336,6 +356,11 @@ func (s *sends) report(br *batchRun) transfer.SendReport {
 func (s *sends) result(br *batchRun, sf transfer.SendFile, outcome, code, reason string) {
 	now := time.Now().UTC()
 	s.mu.Lock()
+	if s.dropped[sf.ID] {
+		delete(s.dropped, sf.ID) // cancelled and recorded already
+		s.mu.Unlock()
+		return
+	}
 	it := s.files[sf.ID]
 	delete(s.files, sf.ID)
 	delete(br.live, sf.ID)
@@ -368,7 +393,7 @@ func (s *sends) result(br *batchRun, sf transfer.SendFile, outcome, code, reason
 		s.held = append(s.held, t)
 		held = &agent.HeldChange{Op: "added", Item: t}
 	case transfer.SendCancelled:
-		if code == "cancelled" && it != nil && !it.cancelled {
+		if code == "cancelled" && it != nil && !it.cancelled && !br.cancelled {
 			// the session stopped: the batch carries on at the next start
 			s.mu.Unlock()
 			return
@@ -420,7 +445,7 @@ func (s *sends) batchLocked(br *batchRun) agent.Batch {
 func (s *sends) finish(br *batchRun, ctx context.Context, err error) {
 	s.mu.Lock()
 	br.running = false
-	if s.stopping && !errors.Is(err, transfer.ErrSendStopped) {
+	if s.stopping && !br.cancelled && !errors.Is(err, transfer.ErrSendStopped) {
 		s.mu.Unlock()
 		s.save(br) // unfinished: runs again at the next start
 		return
@@ -429,6 +454,8 @@ func (s *sends) finish(br *batchRun, ctx context.Context, err error) {
 	br.b.FinishedAt = &now
 	br.b.BPS, br.b.ETASeconds = 0, nil
 	switch {
+	case br.cancelled || errors.Is(err, transfer.ErrSendCancelled):
+		br.b.State = agent.BatchCancelled
 	case err != nil && !errors.Is(err, context.Canceled):
 		br.b.State = agent.BatchFailed
 		msg := driveapi.Reason(err)
@@ -550,21 +577,95 @@ func (s *sends) list() []agent.Batch {
 	return out
 }
 
-// cancel stops one waiting or active send file.
+// cancel stops one send file, whatever it is doing: queued, waiting for
+// room in the queue, waiting to try again, paused or going up. It leaves
+// the lists at once and is recorded as cancelled; its run, when it gets
+// to it, sends nothing (an upload under way is aborted on the drive). A
+// run carried on after a restart leaves it out.
 func (s *sends) cancel(id string) (agent.Transfer, bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	it := s.files[id]
 	if it == nil {
+		s.mu.Unlock()
 		return agent.Transfer{}, false
 	}
+	t, b := s.dropLocked(it, "Cancelled.")
+	s.mu.Unlock()
+	s.record(t, b)
+	s.save(it.batch)
+	return t, true
+}
+
+// dropLocked takes a send file out of the lists as cancelled, for good.
+func (s *sends) dropLocked(it *sendFile, reason string) (agent.Transfer, agent.Batch) {
 	it.cancelled = true
 	if it.cancel != nil {
 		it.cancel()
 	}
+	br := it.batch
+	delete(s.files, it.t.ID)
+	delete(br.live, it.t.ID)
+	s.dropped[it.t.ID] = true
+	br.b.Files = max(0, br.b.Files-1)
+	br.b.Bytes = max(0, br.b.Bytes-it.t.Size)
+	if it.t.LocalPath != "" && !slices.Contains(br.spec.Cancelled, it.t.LocalPath) {
+		br.spec.Cancelled = append(br.spec.Cancelled, it.t.LocalPath)
+	}
+	now := time.Now().UTC()
 	t := it.t
-	t.State = agent.TransferCancelled
-	return t, true
+	t.State, t.FinishedAt, t.BPS, t.ETASeconds = agent.TransferCancelled, &now, 0, nil
+	t.Error = &agent.TransferError{Code: "cancelled", Message: reason}
+	t.Can = agent.TransferCan{}
+	return t, s.batchLocked(br)
+}
+
+// record publishes a cancelled file: history, its event and its batch's.
+func (s *sends) record(t agent.Transfer, b agent.Batch) {
+	s.f.hist.add(t)
+	s.f.signal(agent.FSEvent{Transfer: &t})
+	s.f.signal(agent.FSEvent{Batch: &b})
+	s.f.invalidate()
+}
+
+// cancelBatch stops a whole batch: every file not yet on the drive is
+// cancelled at once, uploads under way are aborted on the drive, and the
+// batch ends as cancelled (it does not carry on after a restart).
+func (s *sends) cancelBatch(id string) (agent.Batch, error) {
+	s.mu.Lock()
+	br := s.batches[id]
+	if br == nil {
+		s.mu.Unlock()
+		return agent.Batch{}, agent.ErrNotFound
+	}
+	if !br.running {
+		b := s.batchLocked(br)
+		s.mu.Unlock()
+		if b.FinishedAt != nil {
+			return b, agent.ErrNotCancellable
+		}
+		return b, nil
+	}
+	br.cancelled = true
+	var ts []agent.Transfer
+	for _, it := range s.files {
+		if it.batch == br {
+			t, _ := s.dropLocked(it, "The send was cancelled.")
+			ts = append(ts, t)
+		}
+	}
+	if br.cancel != nil {
+		br.cancel(transfer.ErrSendCancelled)
+	}
+	b := s.batchLocked(br)
+	s.mu.Unlock()
+	for _, t := range ts {
+		s.f.hist.add(t)
+		s.f.signal(agent.FSEvent{Transfer: &t})
+	}
+	s.f.signal(agent.FSEvent{Batch: &b})
+	s.f.invalidate()
+	s.f.log.Info("core: send cancelled", "batch", id, "files", len(ts))
+	return b, nil
 }
 
 // discard drops a held send file from the list (the file on this PC stays).
@@ -615,7 +716,7 @@ func (s *sends) stop() {
 	s.stopping = true
 	for _, br := range s.batches {
 		if br.cancel != nil {
-			br.cancel()
+			br.cancel(nil)
 		}
 	}
 	s.mu.Unlock()

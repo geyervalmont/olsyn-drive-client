@@ -67,6 +67,9 @@ type SendSpec struct {
 	Files             int // files at once (default 4)
 	// Attrs replaces localfs.AttrsOf (tests).
 	Attrs func(string, os.FileInfo) localfs.Attrs
+	// Skip leaves out local files the person cancelled in an earlier run
+	// of this batch (when it carries on after a restart).
+	Skip func(local string) bool
 }
 
 // SendFile is one file of a batch.
@@ -106,6 +109,11 @@ type Sender struct {
 // ErrSendStopped wraps a run-wide stop: the sign-in was refused, or the
 // destination folder went away.
 var ErrSendStopped = errors.New("transfer: send stopped")
+
+// ErrSendCancelled is the cause to cancel a run's context with when the
+// person cancels the whole batch: unfinished uploads are aborted on the
+// drive (a run stopped any other way leaves them to resume).
+var ErrSendCancelled = errors.New("transfer: send cancelled")
 
 type sendJob struct {
 	f   SendFile
@@ -148,13 +156,22 @@ func (s *Sender) Send(ctx context.Context, spec SendSpec, rep SendReport) error 
 	}
 	n := 0
 	next := func(rel, local string, size int64, mt time.Time) error {
+		if ctx.Err() != nil {
+			return context.Cause(ctx)
+		}
 		n++
+		if spec.Skip != nil && spec.Skip(local) {
+			return nil
+		}
 		f := SendFile{ID: spec.BatchID + "_" + strconv.Itoa(n), Local: local, DrivePath: path.Join(spec.ParentPath, rel), Size: size}
 		rep.found(f)
 		select {
 		case jobs <- sendJob{f: f, rel: rel, mt: mt}:
 			return nil
 		case <-ctx.Done():
+			// found but never queued (the queue was full): it still gets
+			// its result
+			rep.result(f, SendCancelled, "cancelled", "The send was stopped.")
 			return context.Cause(ctx)
 		}
 	}
@@ -237,10 +254,21 @@ func (s *Sender) sendOne(ctx context.Context, spec SendSpec, folders *folderCach
 		}
 	}
 	for attempt := 0; ; attempt++ {
-		outcome, code, reason, err := s.tryOne(fctx, spec, folders, j)
+		if fctx.Err() != nil { // cancelled while queued, paused or waiting to try again
+			if ctx.Err() != nil && !errors.Is(context.Cause(ctx), ErrSendCancelled) {
+				rep.result(j.f, SendCancelled, "cancelled", "The send was stopped; send again to carry on.")
+			} else {
+				rep.result(j.f, SendCancelled, "cancelled", "Cancelled.")
+			}
+			return nil
+		}
+		outcome, code, reason, err := s.tryOne(fctx, ctx, spec, folders, j)
 		switch {
 		case err == nil:
 			rep.result(j.f, outcome, code, reason)
+			return nil
+		case ctx.Err() != nil && errors.Is(context.Cause(ctx), ErrSendCancelled):
+			rep.result(j.f, SendCancelled, "cancelled", "Cancelled.")
 			return nil
 		case ctx.Err() != nil:
 			rep.result(j.f, SendCancelled, "cancelled", "The send was stopped; send again to carry on.")
@@ -273,7 +301,22 @@ func (s *Sender) sendOne(ctx context.Context, spec SendSpec, folders *folderCach
 }
 
 // tryOne makes one attempt. A nil error comes with the final outcome.
-func (s *Sender) tryOne(ctx context.Context, spec SendSpec, folders *folderCache, j sendJob) (outcome, code, reason string, err error) {
+// ctx bounds this file; run is the batch's. An upload the person cancelled
+// (this file, or the whole batch) is aborted on the drive, so nothing of it
+// is kept there; one stopped with the session stays to be resumed.
+func (s *Sender) tryOne(ctx, run context.Context, spec SendSpec, folders *folderCache, j sendJob) (outcome, code, reason string, err error) {
+	var session string
+	defer func() {
+		cancelled := ctx.Err() != nil && (run.Err() == nil || errors.Is(context.Cause(run), ErrSendCancelled))
+		if err == nil || session == "" || !cancelled {
+			return
+		}
+		actx, done := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer done()
+		if aerr := s.API.AbortUpload(actx, session); aerr != nil && !driveapi.IsNotFound(aerr) {
+			s.log().Warn("send: abort a cancelled upload", "transfer", j.f.ID, "code", errCodeOf(aerr))
+		}
+	}()
 	dir, name := path.Split(j.rel)
 	parentID, err := folders.ensure(ctx, strings.TrimSuffix(dir, "/"))
 	if err != nil {
@@ -293,7 +336,8 @@ func (s *Sender) tryOne(ctx context.Context, spec SendSpec, folders *folderCache
 	}
 	req := UploadRequest{TransferID: j.f.ID, ParentID: parentID, Name: name, Size: before.Size(), Src: f,
 		Mime: mime.TypeByExtension(path.Ext(name)), Conflict: driveapi.ConflictFail, ModifiedAt: before.ModTime(),
-		Fingerprint: sendFingerprint(j.f.Local, before.Size(), before.ModTime()), PreCheck: true}
+		Fingerprint: sendFingerprint(j.f.Local, before.Size(), before.ModTime()), PreCheck: true,
+		OnSession: func(id string) { session = id }}
 	res, err := s.Engine.Upload(ctx, req)
 	if driveapi.IsConflict(err) {
 		switch spec.Conflict {
@@ -328,6 +372,13 @@ func (s *Sender) tryOne(ctx context.Context, spec SendSpec, folders *folderCache
 		return SendSkipped, "already_there", "The drive already has this file.", nil
 	}
 	return SendDone, "", "", nil
+}
+
+func (s *Sender) log() *slog.Logger {
+	if s.Logger != nil {
+		return s.Logger
+	}
+	return slog.Default()
 }
 
 func refusal(err error) (string, string, string, error) {

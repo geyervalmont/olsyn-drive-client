@@ -74,6 +74,7 @@ func (a *Agent) handler() http.Handler {
 	route("/v1/drive/folders", get(a.hDriveFolders))
 	route("/v1/activity", get(a.hActivity))
 	route("/v1/batches", get(a.hBatches))
+	route("/v1/batches/{id}/cancel", post(a.hBatchCancel))
 	route("/v1/licences", get(a.hLicences))
 	route("/v1/events", get(a.hEvents))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -270,6 +271,15 @@ func (a *Agent) hTransferCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, t)
+}
+
+func (a *Agent) hBatchCancel(w http.ResponseWriter, r *http.Request) {
+	b, err := a.opts.FS.CancelBatch(r.Context(), r.PathValue("id"))
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
+	writeJSON(w, 200, b)
 }
 
 func (a *Agent) hHeldDiscard(w http.ResponseWriter, r *http.Request) {

@@ -737,6 +737,15 @@ func (f *FS) Cancel(ctx context.Context, id string) (agent.Transfer, error) {
 	return agent.Transfer{}, agent.ErrNotFound
 }
 
+// CancelBatch cancels a send batch midway.
+func (f *FS) CancelBatch(ctx context.Context, id string) (agent.Batch, error) {
+	r := f.current()
+	if r == nil || r.sends == nil {
+		return agent.Batch{}, agent.ErrNotFound
+	}
+	return r.sends.cancelBatch(id)
+}
+
 func (f *FS) heldSeq(id string) (*session, uint64, error) {
 	r := f.current()
 	if r == nil {
