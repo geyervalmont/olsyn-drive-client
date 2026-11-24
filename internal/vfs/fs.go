@@ -42,6 +42,10 @@ type FS struct {
 	subs     map[int]chan Event
 	nextSub  int
 
+	// displaced: drive files just renamed to a temp name, by folder and old
+	// name (see takeDisplaced); guarded by mu.
+	displaced map[string]displacedFile
+
 	// upMu guards uploading; it is a leaf lock (nothing is locked under it).
 	upMu      sync.Mutex
 	uploading map[string]string // local id -> content key being uploaded
@@ -99,7 +103,7 @@ func New(cfg Config) (*FS, error) {
 		cfg.Logger = slog.Default()
 	}
 	fs := &FS{cfg: cfg, api: cfg.API, eng: cfg.Engine, idx: cfg.Index, cache: cfg.Cache, jr: cfg.Journal, log: cfg.Logger,
-		open: map[string]*openNode{}, pending: map[string]int{}, inflight: map[uint64]*running{},
+		open: map[string]*openNode{}, pending: map[string]int{}, inflight: map[uint64]*running{}, displaced: map[string]displacedFile{},
 		uploading: map[string]string{}, listing: map[string]*listCall{}, state: StateOnline,
 		subs: map[int]chan Event{}, kick: make(chan struct{}, 1), wake: make(chan struct{}, 1)}
 	if err := fs.recover(); err != nil {

@@ -43,9 +43,10 @@ func (fs *FS) dispatchLoop() {
 }
 
 // dispatch starts queued changes in journal order. An op waits while an
-// earlier unfinished op touches its node or its folder, or (renames) while
-// an earlier delete in the same folder is unfinished, so a rename over a
-// deleted file reaches the drive after the delete.
+// earlier unfinished op touches its node or its folder; a rename waits for
+// an earlier unfinished delete in the same folder, and a new file or folder
+// for an earlier delete of the same name there, so a save over a deleted
+// file (Office's save by rename) reaches the drive after the delete.
 func (fs *FS) dispatch() {
 	if fs.State() == StateSignedOut || fs.ctx.Err() != nil {
 		return
@@ -58,12 +59,16 @@ func (fs *FS) dispatch() {
 	now := time.Now()
 	busyNode := map[string]bool{}
 	deletesIn := map[string]bool{}
+	deletedName := map[string]bool{} // parent id + NUL + folded name
+	nameKey := func(op journal.Op) string { return op.ParentID + "\x00" + index.Fold(op.Name) }
 	for _, op := range ops {
 		blocked := busyNode[op.NodeID] || (op.ParentID != "" && busyNode[op.ParentID]) ||
-			(op.Kind == journal.OpRename && deletesIn[op.ParentID])
+			(op.Kind == journal.OpRename && deletesIn[op.ParentID]) ||
+			((op.Kind == journal.OpUpload || op.Kind == journal.OpMkdir) && deletedName[nameKey(op)])
 		busyNode[op.NodeID] = true
 		if op.Kind == journal.OpDelete {
 			deletesIn[op.ParentID] = true
+			deletedName[nameKey(op)] = true
 		}
 		if blocked || op.State != journal.StatePending || now.Before(op.NotBefore) {
 			continue
@@ -183,6 +188,13 @@ func (fs *FS) hold(op journal.Op, code, reason string) {
 }
 
 func (fs *FS) exec(ctx context.Context, op *journal.Op) error {
+	// An op is written to the journal while its producer (create, save,
+	// rename, delete) holds treeMu, and the index entry the op reads is
+	// written just after. Wait for the producer, or a fast dispatcher reads
+	// the entry as it was before (a saved temp file sent under its temp name).
+	fs.treeMu.Lock()
+	//lint:ignore SA2001 an empty critical section is the barrier
+	fs.treeMu.Unlock()
 	switch op.Kind {
 	case journal.OpMkdir:
 		return fs.execMkdir(ctx, op)

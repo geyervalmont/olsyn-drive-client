@@ -264,14 +264,21 @@ func (fs *FS) create(ctx context.Context, parent *index.Entry, name, path string
 // counts it as pending. The count goes up before the op is visible to the
 // dispatcher, so a fast op cannot finish before it was counted.
 func (fs *FS) queue(op journal.Op) error {
+	_, err := fs.queueSeq(op)
+	return err
+}
+
+// queueSeq is queue, returning the op's journal sequence number.
+func (fs *FS) queueSeq(op journal.Op) (uint64, error) {
 	fs.mu.Lock()
 	fs.pending[op.NodeID]++
 	fs.mu.Unlock()
-	if _, err := fs.jr.Write(op); err != nil {
+	written, err := fs.jr.Write(op)
+	if err != nil {
 		fs.doneLocked(op)
-		return newErr(KindOther, "queue", op.Name, err)
+		return 0, newErr(KindOther, "queue", op.Name, err)
 	}
-	return nil
+	return written.Seq, nil
 }
 
 // durable waits until every change queued so far is on the device. Many
@@ -952,6 +959,12 @@ func (fs *FS) Rename(ctx context.Context, from, to string, replace bool) error {
 	if err := fs.ensureListed(ctx, dst); err != nil {
 		return err
 	}
+	// A file not yet on the drive saved over a drive file (rename over it,
+	// or Word's way: the original renamed to a temp name just before) is a
+	// new version of that drive file, not a delete and a new file.
+	newFile := !src.IsDir() && src.ServerID == "" && !dst.LocalOnly && !IsJunk(name)
+	var adopt *index.Entry
+	var displacedSeq uint64
 	if ex, err := fs.idx.Lookup(dst.ID, name); err == nil && ex.ID != src.ID {
 		if !replace {
 			return newErr(KindExists, "rename", to, nil)
@@ -969,12 +982,25 @@ func (fs *FS) Rename(ctx context.Context, from, to string, replace bool) error {
 				}
 			}
 		}
-		if err := fs.canDelete(ctx, ex, to); err != nil {
-			return err
+		if newFile && ex.ServerID != "" && !ex.LocalOnly && canModify(ex) {
+			adopt = ex
+		} else {
+			if err := fs.canDelete(ctx, ex, to); err != nil {
+				return err
+			}
+			if err := fs.removeEntry(ctx, ex.ID, to); err != nil {
+				return err
+			}
 		}
-		if err := fs.removeEntry(ctx, ex.ID, to); err != nil {
-			return err
+	} else if newFile {
+		adopt, displacedSeq = fs.takeDisplaced(dst.ID, name)
+	}
+	if adopt != nil {
+		if err := fs.adoptVersion(ctx, src, adopt, displacedSeq, dst, name); err != nil {
+			return classify("rename", to, err)
 		}
+		fs.kickNow()
+		return fs.durable(ctx, "rename", to)
 	}
 	fs.treeMu.Lock()
 	cur, err := fs.idx.Get(src.ID)
@@ -994,7 +1020,18 @@ func (fs *FS) Rename(ctx context.Context, from, to string, replace bool) error {
 		}
 		err = fs.queue(op)
 	case !wasJunk:
-		err = fs.queue(journal.Op{Kind: journal.OpRename, NodeID: cur.ID, ParentID: dst.ID, Name: name, ServerID: cur.ServerID})
+		op := journal.Op{Kind: journal.OpRename, NodeID: cur.ID, ParentID: dst.ID, Name: name, ServerID: cur.ServerID}
+		displaced := cur.ServerID != "" && !cur.IsDir() && isSaveTemp(name) && dst.ID == src.ParentID
+		if displaced {
+			// Word renames the original to a temp name, then its new copy to
+			// the original name: wait a moment so that becomes a new version.
+			op.NotBefore = time.Now().Add(displaceHold)
+		}
+		var seq uint64
+		seq, err = fs.queueSeq(op)
+		if err == nil && displaced {
+			fs.noteDisplaced(src.ParentID, src.Name, cur.ID, seq)
+		}
 	}
 	if err == nil {
 		err = fs.idx.Put(cur)
