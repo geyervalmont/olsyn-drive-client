@@ -60,6 +60,11 @@ type ChangesPage struct {
 // ChangesMaxPage is the feed's largest page.
 const ChangesMaxPage = 500
 
+// ChangesRateLimit is how many GET /api/v1/changes calls the drive takes a
+// minute per credential (each device token); beyond it, 429 rate_limited
+// with Retry-After (60 s in practice).
+const ChangesRateLimit = 60
+
 // Changes reads the feed after cursor since. since < 0 means "no cursor":
 // the answer is a reset with the current position, to take BEFORE a full
 // listing. folder limits the feed to one subtree ("" for everything).

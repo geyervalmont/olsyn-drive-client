@@ -20,14 +20,21 @@ type rateWindow struct {
 // Retry-After (whole seconds until the window ends) and reports true.
 // limit <= 0 means no limit.
 func (s *Server) rateLimitedLocked(w http.ResponseWriter, name string, limit int) bool {
+	return s.rateLimitedByLocked(w, name, name, limit, 0)
+}
+
+// rateLimitedByLocked is rateLimitedLocked counted under key (a limit per
+// credential has one key per token) with a fixed Retry-After when
+// retryAfter > 0 (else the rest of the window).
+func (s *Server) rateLimitedByLocked(w http.ResponseWriter, name, key string, limit int, retryAfter time.Duration) bool {
 	if limit <= 0 {
 		return false
 	}
 	now := time.Now()
-	rw := s.rates[name]
+	rw := s.rates[key]
 	if rw == nil || now.Sub(rw.start) >= s.opts.RateWindow {
 		rw = &rateWindow{start: now}
-		s.rates[name] = rw
+		s.rates[key] = rw
 	}
 	rw.n++
 	if rw.n <= limit {
@@ -35,9 +42,21 @@ func (s *Server) rateLimitedLocked(w http.ResponseWriter, name string, limit int
 	}
 	s.counts[name+".429"]++
 	left := rw.start.Add(s.opts.RateWindow).Sub(now)
+	if retryAfter > 0 {
+		left = retryAfter
+	}
 	w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(left.Seconds())))))
 	fail(w, http.StatusTooManyRequests, driveapi.CodeRateLimited, "too many requests", nil)
 	return true
+}
+
+// SetChangesRate changes the per-credential limit of changes calls (see
+// Options.ChangesRate; negative: none); counting starts again.
+func (s *Server) SetChangesRate(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.opts.ChangesRate = n
+	clear(s.rates)
 }
 
 // SetRateLimits changes the per-window limits of pre-checks and upload

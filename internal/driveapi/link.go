@@ -163,7 +163,7 @@ type Heartbeat struct {
 
 // SendHeartbeat posts a heartbeat. A 401 here means the device was unlinked.
 func (c *Client) SendHeartbeat(ctx context.Context, hb Heartbeat) error {
-	return c.do(ctx, request{op: "heartbeat", method: http.MethodPost, path: "/api/mount/v1/heartbeat", body: hb}, nil)
+	return c.do(ctx, request{op: "heartbeat", method: http.MethodPost, path: "/api/mount/v1/heartbeat", body: hb, noRateWait: true}, nil)
 }
 
 // UnlinkDevice revokes a linked device and its token

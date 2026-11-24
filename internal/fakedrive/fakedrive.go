@@ -68,6 +68,14 @@ type Options struct {
 	UploadStartRate int
 	// RateWindow is the window of those rates. Default one minute.
 	RateWindow time.Duration
+	// ChangesRate is how many GET /api/v1/changes calls one credential may
+	// make per RateWindow; more answer 429 rate_limited with Retry-After
+	// ChangesRetryAfter. Default the real drive's driveapi.ChangesRateLimit;
+	// negative: no limit.
+	ChangesRate int
+	// ChangesRetryAfter is the Retry-After of a refused changes call.
+	// Default the whole window, as the real drive answers ("60").
+	ChangesRetryAfter time.Duration
 }
 
 // Server is a running fake drive.
@@ -207,6 +215,12 @@ func New(opts Options) *Server {
 	if opts.RateWindow <= 0 {
 		opts.RateWindow = time.Minute
 	}
+	if opts.ChangesRate == 0 {
+		opts.ChangesRate = driveapi.ChangesRateLimit
+	}
+	if opts.ChangesRetryAfter <= 0 {
+		opts.ChangesRetryAfter = opts.RateWindow
+	}
 	s := &Server{
 		opts:      opts,
 		nodes:     map[string]*node{},
@@ -266,7 +280,7 @@ func (s *Server) Close() {
 
 // Count returns how often a thing happened: "upload.start", "upload.complete",
 // "part.put" (and "part.put.multipart" for large files' parts), "download", "children", "changes", "folder.create", "patch", "trash",
-// "check" (pre-checks answered), "check.422" (refused for their size), "check.429" and "upload.start.429" (refused for the rate),
+// "check" (pre-checks answered), "check.422" (refused for their size), "check.429", "upload.start.429" and "changes.429" (refused for the rate),
 // "upload.start.422.modified_at".
 func (s *Server) Count(name string) int {
 	s.mu.Lock()

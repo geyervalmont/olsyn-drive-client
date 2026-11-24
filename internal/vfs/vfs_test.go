@@ -38,6 +38,13 @@ type env struct {
 	release      cache.ReleasePolicy
 	releaseEvery time.Duration
 	keepOffline  func(string) bool
+	// stream turns the SSE wake-ups on; poll is the feed's idle poll
+	// (zero: 200 ms)
+	stream bool
+	poll   time.Duration
+	// realFeed: the drive limits the feed and the client paces itself
+	// with its production settings
+	realFeed bool
 
 	fs    *vfs.FS
 	idx   *index.DB
@@ -53,13 +60,23 @@ func newEnv(t *testing.T) *env {
 
 func newEnvWith(t *testing.T, opts fakedrive.Options) *env {
 	t.Helper()
+	// The feed's limit (60 calls a minute) and the client's pace under it
+	// are modelled only when a test asks for the limit: elsewhere the feed
+	// is read every 200 ms, quickly after every wake-up.
+	realFeed := opts.ChangesRate > 0
+	limits := driveapi.DefaultLimits()
+	if !realFeed {
+		opts.ChangesRate = -1
+		delete(limits, driveapi.ClassChanges)
+	}
 	fd := fakedrive.New(opts)
 	t.Cleanup(fd.Close)
-	api, err := driveapi.New(driveapi.Options{BaseURL: fd.URL(), Token: func(context.Context) (string, error) { return fd.Token(), nil }})
+	api, err := driveapi.New(driveapi.Options{BaseURL: fd.URL(), Token: func(context.Context) (string, error) { return fd.Token(), nil },
+		Limits: limits})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &env{t: t, fd: fd, api: api, dir: t.TempDir(), cacheCap: 64 << 20, attempts: 3}
+	return &env{t: t, fd: fd, api: api, dir: t.TempDir(), cacheCap: 64 << 20, attempts: 3, realFeed: realFeed}
 }
 
 var fast = driveapi.Backoff{Base: 20 * time.Millisecond, Max: 200 * time.Millisecond}
@@ -85,9 +102,18 @@ func (e *env) start() *env {
 				f.TransferEvent(ev)
 			}
 		}})
+	poll := e.poll
+	if poll <= 0 {
+		poll = 200 * time.Millisecond
+	}
+	minI, maxI, perMinute := 20*time.Millisecond, 100*time.Millisecond, -1
+	if e.realFeed {
+		minI, maxI, perMinute = 0, 0, 0 // the defaults
+	}
 	e.fs, err = vfs.New(vfs.Config{API: e.api, Engine: e.eng, Index: e.idx, Cache: e.cache, Journal: e.jr,
-		RootID: e.fd.RootID(), PCName: "TestPC", PollInterval: 200 * time.Millisecond, Backoff: fast,
-		ReadTimeout: 5 * time.Second, DisableStream: true, ReadAhead: 64 << 10,
+		RootID: e.fd.RootID(), PCName: "TestPC", PollInterval: poll, Backoff: fast,
+		ReadTimeout: 5 * time.Second, DisableStream: !e.stream, ReadAhead: 64 << 10,
+		ChangesMinInterval: minI, ChangesMaxInterval: maxI, ChangesPerMinute: perMinute,
 		Release: e.release, ReleaseInterval: e.releaseEvery, KeepOffline: e.keepOffline})
 	if err != nil {
 		t.Fatal(err)

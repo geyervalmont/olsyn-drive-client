@@ -4,8 +4,8 @@
 // signed release manifest.
 //
 // The client retries only one thing by itself: a 429 rate_limited answer is
-// waited out (Retry-After, shared by every request of the Client, bounded;
-// see pace.go). Everything else is the caller's decision, with the
+// waited out (Retry-After, shared by the requests of the same route class,
+// bounded; see pace.go), and it keeps each class under the drive's limits. Everything else is the caller's decision, with the
 // classification helpers (IsRetryable, IsPermanent, IsConflict, IsAuthLost)
 // and Backoff.
 // The bearer token comes from a callback on every request and is never logged.
@@ -55,6 +55,11 @@ type Options struct {
 	// stay under the drive's limit of CheckRateLimit a minute per person:
 	// 0 means CheckPacePerMinute, a negative value no pacing (tests).
 	CheckPerMinute int
+	// Limits are the drive's limits by route class, in calls a minute; no
+	// class uses more than 80% of its limit. Nil means DefaultLimits(); an
+	// empty map none known (tests). A class without one learns it from its
+	// first 429.
+	Limits Limits
 }
 
 // Client talks to one drive.
@@ -64,7 +69,7 @@ type Client struct {
 	http  *http.Client
 	ua    string
 	log   *slog.Logger
-	pace  *pacer  // the drive's 429 waits, shared by every request
+	pace  *pacer  // the drive's 429 waits and the limits' guards, by route class
 	check *bucket // pre-check pacing; nil: none
 	// rateRetries is how many 429s one call waits out (tests lower it)
 	rateRetries int
@@ -103,7 +108,11 @@ func New(opts Options) (*Client, error) {
 	if per == 0 {
 		per = CheckPacePerMinute
 	}
-	return &Client{base: u, token: tok, http: hc, ua: ua, log: log, pace: &pacer{}, check: newBucket(per, checkBurst),
+	limits := opts.Limits
+	if limits == nil {
+		limits = DefaultLimits()
+	}
+	return &Client{base: u, token: tok, http: hc, ua: ua, log: log, pace: newPacer(limits), check: newBucket(per, checkBurst),
 		rateRetries: rateRetries}, nil
 }
 
@@ -120,6 +129,9 @@ type request struct {
 	header  http.Header
 	noAuth  bool
 	accept2 []int // extra success statuses besides 2xx
+	// noRateWait returns a 429 at once instead of waiting it out (a call
+	// that is repeated on its own schedule, like the heartbeat)
+	noRateWait bool
 }
 
 func (c *Client) url(path string, q url.Values) string {
@@ -130,9 +142,13 @@ func (c *Client) url(path string, q url.Values) string {
 	return s
 }
 
+// PaceStats reports what the pacing of one route class has done.
+func (c *Client) PaceStats(class Class) ClassStats { return c.pace.stats(class) }
+
 // send performs the request and returns the response for statuses below 300
 // (and the extra accepted ones). Other statuses become *Error. A 429 is
-// waited out and sent again (rateRetries times) before it is returned.
+// waited out and sent again (rateRetries times) before it is returned; the
+// wait holds only the request's route class.
 func (c *Client) send(ctx context.Context, r request) (*http.Response, error) {
 	var body []byte
 	if r.body != nil {
@@ -142,18 +158,24 @@ func (c *Client) send(ctx context.Context, r request) (*http.Response, error) {
 		}
 		body = b
 	}
+	class := classify(r.method, r.path)
 	for n := 0; ; n++ {
-		if err := c.pace.wait(ctx); err != nil {
+		if r.noRateWait {
+			c.pace.note(class) // it goes now: the caller has its own schedule
+		} else if err := c.pace.wait(ctx, class); err != nil {
 			return nil, &Error{Op: r.op, Err: err}
 		}
 		resp, err := c.sendOnce(ctx, r, body)
 		var e *Error
-		if n >= c.rateRetries || !errors.As(err, &e) || e.Status != http.StatusTooManyRequests {
+		if !errors.As(err, &e) || e.Status != http.StatusTooManyRequests {
 			return resp, err
 		}
 		d := rateWait(n, e.RetryAfter)
-		c.pace.hold(d)
-		c.log.InfoContext(ctx, "drive asked to wait", "op", r.op, "wait_ms", d.Milliseconds(), "attempt", n+1)
+		c.pace.hold(class, d, e.RetryAfter)
+		if r.noRateWait || n >= c.rateRetries {
+			return resp, err
+		}
+		c.log.InfoContext(ctx, "drive asked to wait", "op", r.op, "class", class.String(), "wait_ms", d.Milliseconds(), "attempt", n+1)
 	}
 }
 

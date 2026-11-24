@@ -616,6 +616,11 @@ func (s *Server) changes(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// 60 a minute per credential, as the real feed
+	tok, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if s.rateLimitedByLocked(w, "changes", "changes|"+tok, s.opts.ChangesRate, s.opts.ChangesRetryAfter) {
+		return
+	}
 	if s.faults.reset != "" {
 		reason := s.faults.reset
 		s.faults.reset = ""

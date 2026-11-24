@@ -65,6 +65,7 @@ type FS struct {
 
 	kick chan struct{} // wake the dispatcher
 	wake chan struct{} // wake the changes loop
+	feed *feedPacer    // the changes loop's pace (used by that loop only)
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -106,6 +107,16 @@ func New(cfg Config) (*FS, error) {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 30 * time.Second
 	}
+	if cfg.ChangesMinInterval <= 0 {
+		cfg.ChangesMinInterval = defaultChangesMinInterval
+	}
+	if cfg.ChangesMaxInterval <= 0 {
+		cfg.ChangesMaxInterval = defaultChangesMaxInterval
+	}
+	cfg.ChangesMaxInterval = max(cfg.ChangesMaxInterval, cfg.ChangesMinInterval)
+	if cfg.ChangesPerMinute == 0 {
+		cfg.ChangesPerMinute = defaultChangesPerMinute
+	}
 	if cfg.Workers <= 0 {
 		cfg.Workers = 4
 	}
@@ -130,7 +141,8 @@ func New(cfg Config) (*FS, error) {
 	fs := &FS{release: cfg.Release.WithDefaults(), cfg: cfg, api: cfg.API, eng: cfg.Engine, idx: cfg.Index, cache: cfg.Cache, jr: cfg.Journal, log: cfg.Logger,
 		open: map[string]*openNode{}, pending: map[string]int{}, deleting: map[string]int{}, touched: map[string]touchedAt{}, inflight: map[uint64]*running{}, displaced: map[string]displacedFile{},
 		uploading: map[string]string{}, listing: map[string]*listCall{}, state: StateOnline,
-		subs: map[int]chan Event{}, kick: make(chan struct{}, 1), wake: make(chan struct{}, 1)}
+		subs: map[int]chan Event{}, kick: make(chan struct{}, 1), wake: make(chan struct{}, 1),
+		feed: newFeedPacer(cfg.ChangesMinInterval, cfg.ChangesMaxInterval, cfg.ChangesPerMinute)}
 	if err := fs.recover(); err != nil {
 		return nil, err
 	}
@@ -593,6 +605,15 @@ func (fs *FS) changedSince(sid string, before uint64) bool {
 	defer fs.mu.Unlock()
 	t, ok := fs.touched[sid]
 	return ok && t.gen > before
+}
+
+// justChanged reports a node one of this PC's changes reached the drive
+// for within ownEchoWindow.
+func (fs *FS) justChanged(sid string) bool {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	t, ok := fs.touched[sid]
+	return ok && time.Since(t.at) < ownEchoWindow
 }
 
 // relist refreshes a folder in the background (after a resync). A listing

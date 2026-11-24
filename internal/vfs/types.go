@@ -178,6 +178,14 @@ type Config struct {
 	ReadTimeout time.Duration
 	// PollInterval for the changes feed without SSE wake-ups (default 30 s).
 	PollInterval time.Duration
+	// ChangesMinInterval is the least time between two reads of the
+	// changes feed on wake-ups (default 2 s); while this PC is itself
+	// sending many changes it grows up to ChangesMaxInterval (default 10 s).
+	// Wake-ups in between are covered by the read that follows them.
+	ChangesMinInterval, ChangesMaxInterval time.Duration
+	// ChangesPerMinute caps the changes calls in any minute, every page
+	// counted (default 40, under the drive's 60 a minute; negative: no cap).
+	ChangesPerMinute int
 	// Workers is how many queued changes run at once (default 4).
 	Workers int
 	// ReadAhead is fetched past a sequential read (default 4 MiB).

@@ -2,6 +2,7 @@ package vfs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strconv"
@@ -15,11 +16,14 @@ import (
 const metaCursor = "changes_cursor"
 
 // changesLoop reads the changes feed on SSE wake-ups and every poll
-// interval, and probes the drive every few seconds while offline.
+// interval, and probes the drive every few seconds while offline. A
+// wake-up is read at the pace of fs.feed (see feedpace.go): one read at a
+// time, a minimum interval apart, always one after the last wake-up.
 func (fs *FS) changesLoop() {
 	failures := 0
 	for {
 		err := fs.pollChanges(fs.ctx)
+		fs.feed.done(time.Now(), fs.finished.Load())
 		wait := fs.cfg.PollInterval
 		if err != nil && fs.ctx.Err() == nil {
 			fs.noteErr(err)
@@ -34,6 +38,20 @@ func (fs *FS) changesLoop() {
 		case <-fs.ctx.Done():
 			return
 		case <-fs.wake:
+			// wake-ups until the next read are covered by it
+			if d := fs.feed.wait(time.Now()); d > 0 {
+				t := time.NewTimer(d)
+				select {
+				case <-fs.ctx.Done():
+					t.Stop()
+					return
+				case <-t.C:
+				}
+			}
+			select {
+			case <-fs.wake:
+			default:
+			}
 		case <-time.After(wait):
 		}
 	}
@@ -46,6 +64,9 @@ func (fs *FS) pollChanges(ctx context.Context) error {
 	cur := fs.idx.Meta(metaCursor)
 	if cur == "" {
 		// take the cursor BEFORE listing anything
+		if err := fs.feed.take(ctx); err != nil {
+			return err
+		}
 		p, err := fs.api.Changes(ctx, -1, 0, "")
 		if err != nil {
 			return err
@@ -57,6 +78,9 @@ func (fs *FS) pollChanges(ctx context.Context) error {
 		since = -1
 	}
 	for {
+		if err := fs.feed.take(ctx); err != nil {
+			return err
+		}
 		before := fs.finished.Load()
 		p, err := fs.api.Changes(ctx, since, driveapi.ChangesMaxPage, "")
 		if err != nil {
@@ -69,14 +93,18 @@ func (fs *FS) pollChanges(ctx context.Context) error {
 		}
 		var relist []string
 		var outcomes []claimOutcome
+		var others []driveapi.Change // not mere echoes of this PC's own changes
 		fs.treeMu.Lock()
 		err = fs.idx.Update(func(tx *index.Tx) error {
-			relist, outcomes = relist[:0], outcomes[:0]
+			relist, outcomes, others = relist[:0], outcomes[:0], others[:0]
 			for i := range p.Changes {
 				if ch := &p.Changes[i]; ch.Node != nil && fs.changedSince(ch.Node.ID, before) {
 					// this PC changed it after the page was read: the page
 					// may show it as it was (a later page has what it is)
 					continue
+				}
+				if !fs.confirmsOwn(tx, &p.Changes[i]) {
+					others = append(others, p.Changes[i])
 				}
 				if err := fs.applyChange(tx, &p.Changes[i], &relist); err != nil {
 					return err
@@ -93,7 +121,7 @@ func (fs *FS) pollChanges(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		fs.listingsMayBeStale(p.Changes)
+		fs.listingsMayBeStale(others)
 		for _, id := range relist {
 			fs.relist(id)
 		}
@@ -161,6 +189,24 @@ func (fs *FS) applyChange(tx *index.Tx, ch *driveapi.Change, relist *[]string) e
 		return fs.resyncFolder(tx, e.ID, relist)
 	}
 	return nil
+}
+
+// confirmsOwn reports a feed entry that only confirms a change this PC
+// just made: an upsert, without resync, of a node changed here moments ago
+// that the index already holds as the entry describes it. It changes
+// nothing a listing in flight could undo, so it does not make one fetch
+// again (during a bulk copy nearly every entry is one).
+func (fs *FS) confirmsOwn(tx *index.Tx, ch *driveapi.Change) bool {
+	n := ch.Node
+	if ch.Op != driveapi.OpUpsert || ch.Resync != "" || n == nil || n.TrashedAt != nil || !fs.justChanged(n.ID) {
+		return false
+	}
+	e, err := tx.BySID(n.ID)
+	if err != nil || e.Name != n.Name || e.Kind != n.Kind || (!e.IsDir() && e.VersionID != n.VersionID()) {
+		return false
+	}
+	parent, err := tx.Get(e.ParentID)
+	return err == nil && parent.ServerID == n.ParentID
 }
 
 // listingsMayBeStale marks a listing in flight for a folder these changes
@@ -308,13 +354,24 @@ func (fs *FS) relistInOrder(ids []string) {
 	}
 }
 
+// ownEcho reports a change event about a node this PC changed moments ago:
+// the drive telling this PC what it just did. It does not wake the changes
+// loop (the next read, at the latest the regular poll, records it).
+func (fs *FS) ownEcho(ev driveapi.StreamEvent) bool {
+	var ch driveapi.StreamChange
+	if json.Unmarshal(ev.Data, &ch) != nil || ch.NodeID == "" {
+		return false
+	}
+	return fs.justChanged(ch.NodeID)
+}
+
 // streamLoop keeps the SSE stream open; every event (and every reconnect)
 // wakes the changes loop.
 func (fs *FS) streamLoop() {
 	failures := 0
 	for {
 		err := fs.api.Stream(fs.ctx, func() { failures = 0; fs.wakeNow() }, func(ev driveapi.StreamEvent) error {
-			if ev.Event == "change" {
+			if ev.Event == "change" && !fs.ownEcho(ev) {
 				fs.wakeNow()
 			}
 			return nil

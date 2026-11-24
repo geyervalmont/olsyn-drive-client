@@ -380,6 +380,8 @@ func (a *Agent) heartbeat(ctx context.Context) bool {
 	case errors.Is(err, ErrUnauthenticated):
 		a.revoked(ctx)
 		return false
+	case errors.As(err, &ra) && ra.Code == "rate_limited":
+		// the drive answered: it is reachable, the next beat is in its time
 	case errors.As(err, &ra):
 		next = ServerRestarting
 	case ctx.Err() != nil:
