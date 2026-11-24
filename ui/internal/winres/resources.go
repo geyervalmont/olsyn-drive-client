@@ -130,6 +130,18 @@ type VersionInfo struct {
 	FileName    string
 }
 
+// OlsynDrive is the version information of olsyn-drive.exe.
+func OlsynDrive(version string) VersionInfo {
+	return VersionInfo{
+		Version:     version,
+		ProductName: "Olsyn Drive",
+		Description: "Olsyn Drive",
+		Company:     "Olsyn",
+		Copyright:   "Copyright Olsyn. Licensed under the Apache License 2.0.",
+		FileName:    "olsyn-drive.exe",
+	}
+}
+
 // NumericVersion takes up to four leading numbers from a version string
 // ("v1.4.2-3-g…" is 1.4.2.3 and "dev" is 0.0.0.0).
 func NumericVersion(v string) [4]uint16 {

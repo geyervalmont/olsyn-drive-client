@@ -8,7 +8,8 @@ Windows 11 first; macOS and Linux follow.
 - Agent and interface contract: [docs/ipc.md](docs/ipc.md)
 - Testing on Windows: [docs/testing-windows.md](docs/testing-windows.md)
 - Unsigned pre-release on Windows (SmartScreen, Windows Security, the one folder exclusion):
-  [docs/pre-release-windows.md](docs/pre-release-windows.md)
+  [docs/pre-release-windows.md](docs/pre-release-windows.md); reporting a false positive to Microsoft:
+  [docs/false-positive-submission.md](docs/false-positive-submission.md)
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md); reporting a vulnerability: [SECURITY.md](SECURITY.md)
 
 ## Install
@@ -53,6 +54,7 @@ While builds are unsigned, a person sees this:
     make        # dist/windows-amd64/olsyn-drive.exe (needs Go and Node)
     make dev    # development build plus a fake drive server for testing
     make test
+    make fp-info  # name, size, SHA-256 and version of the built exe, for a false-positive report
 
 The program does not carry WinFsp. When the driver is missing, its driver step downloads WinFsp's own installer from
 the WinFsp project's v2.2 GitHub release, checks its size, SHA-256 (pinned in `internal/winfspmsi`) and Authenticode

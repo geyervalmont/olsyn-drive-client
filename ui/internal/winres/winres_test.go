@@ -33,7 +33,7 @@ func testResources(t *testing.T) []Resource {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return append(icon, ManifestResource(), VersionInfo{Version: "v1.4.2-3-gabc", ProductName: "Olsyn Drive", FileName: "olsyn-drive.exe"}.Resource())
+	return append(icon, ManifestResource(), OlsynDrive("v1.4.2-3-gabc").Resource())
 }
 
 // walk reads a resource section (as it sits in an object, or in an image
@@ -241,6 +241,31 @@ func TestLinkedProgramCarriesTheResources(t *testing.T) {
 				t.Fatalf("resource directory at %x, .rsrc at %x", dirRVA, sec.VirtualAddress)
 			}
 			checkResources(t, walk(t, data, sec.VirtualAddress))
+			f.Close()
+
+			p, err := ReadProgram(exe)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.FileName != "t.exe" || p.Size == 0 || len(p.SHA256) != 64 {
+				t.Errorf("file facts: %+v", p)
+			}
+			if p.FileVersion != [4]uint16{1, 4, 2, 3} || p.Strings["ProductVersion"] != "v1.4.2-3-gabc" {
+				t.Errorf("version: %v %q", p.FileVersion, p.Strings["ProductVersion"])
+			}
+			for _, k := range RequiredStrings {
+				if want := map[string]string{
+					"CompanyName": "Olsyn", "ProductName": "Olsyn Drive", "OriginalFilename": "olsyn-drive.exe",
+				}[k]; want != "" && p.Strings[k] != want {
+					t.Errorf("%s = %q, want %q", k, p.Strings[k], want)
+				}
+			}
+			if m := p.Missing(); len(m) != 0 {
+				t.Errorf("missing version entries: %v", m)
+			}
+			if p.ExecutionLevel != "asInvoker" {
+				t.Errorf("execution level %q: the program must not ask for administrator rights", p.ExecutionLevel)
+			}
 		})
 	}
 }

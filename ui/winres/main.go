@@ -4,6 +4,13 @@
 //
 //	go run ./ui/winres -version v1.2.3 -out cmd/olsyn-drive
 //
+// With -inspect it reads a built program instead and prints what a
+// false-positive report to an antivirus vendor asks for (file name, size,
+// SHA-256, version) and the version details Explorer shows; it fails when a
+// required detail is missing or the program asks for administrator rights:
+//
+//	go run ./ui/winres -inspect dist/windows-amd64/olsyn-drive.exe
+//
 // It needs no cgo, no Windows and no third-party module. The Makefile runs it
 // before every Windows build so the version is current.
 package main
@@ -11,6 +18,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,7 +36,15 @@ func main() {
 	archs := flag.String("arch", "amd64,arm64", "comma-separated GOARCH values")
 	out := flag.String("out", "cmd/olsyn-drive", "folder for rsrc_windows_<arch>.syso")
 	ico := flag.String("ico", "", "also write the icon as a .ico file here")
+	inspect := flag.String("inspect", "", "print the details of this built program instead")
 	flag.Parse()
+	if *inspect != "" {
+		if err := printProgram(os.Stdout, *inspect); err != nil {
+			fmt.Fprintln(os.Stderr, "winres:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(*version, strings.Split(*archs, ","), *out, *ico); err != nil {
 		fmt.Fprintln(os.Stderr, "winres:", err)
 		os.Exit(1)
@@ -48,14 +64,7 @@ func run(version string, archs []string, outDir, icoPath string) error {
 	if err != nil {
 		return err
 	}
-	resources := append(icon, winres.ManifestResource(), winres.VersionInfo{
-		Version:     version,
-		ProductName: "Olsyn Drive",
-		Description: "Olsyn Drive",
-		Company:     "Olsyn",
-		Copyright:   "Copyright Olsyn. Licensed under the Apache License 2.0.",
-		FileName:    "olsyn-drive.exe",
-	}.Resource())
+	resources := append(icon, winres.ManifestResource(), winres.OlsynDrive(version).Resource())
 	for _, arch := range archs {
 		m, err := winres.MachineFor(strings.TrimSpace(arch))
 		if err != nil {
@@ -78,6 +87,33 @@ func run(version string, archs []string, outDir, icoPath string) error {
 		if err := os.WriteFile(icoPath, data, 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", icoPath, err)
 		}
+	}
+	return nil
+}
+
+// printProgram prints a built program's facts for a false-positive report.
+func printProgram(w io.Writer, path string) error {
+	p, err := winres.ReadProgram(path)
+	if err != nil {
+		return err
+	}
+	v := p.FileVersion
+	fmt.Fprintf(w, "File name:        %s\n", p.FileName)
+	fmt.Fprintf(w, "Size:             %d bytes\n", p.Size)
+	fmt.Fprintf(w, "SHA-256:          %s\n", p.SHA256)
+	fmt.Fprintf(w, "Version:          %s (file version %d.%d.%d.%d)\n", p.Strings["ProductVersion"], v[0], v[1], v[2], v[3])
+	for _, k := range winres.RequiredStrings {
+		if k == "FileVersion" || k == "ProductVersion" {
+			continue
+		}
+		fmt.Fprintf(w, "%-17s %s\n", k+":", p.Strings[k])
+	}
+	fmt.Fprintf(w, "Execution level:  %s\n", p.ExecutionLevel)
+	if m := p.Missing(); len(m) > 0 {
+		return fmt.Errorf("%s lacks version details: %v", p.FileName, m)
+	}
+	if p.ExecutionLevel != "asInvoker" {
+		return fmt.Errorf("%s asks for %q; it must run as the invoking user", p.FileName, p.ExecutionLevel)
 	}
 	return nil
 }

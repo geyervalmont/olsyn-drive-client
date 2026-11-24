@@ -9,6 +9,8 @@
 #   make host-dev       the same two for this computer (dist/host-dev/), without the desktop app
 #   make vet test       go vet on the four targets; tests (two packages at a time)
 #   make notices        regenerate the open-source notices
+#   make fp-info        file name, size, SHA-256 and version of the release exe, for a
+#                       false-positive report (EXE=path for another file)
 #   make clean
 
 GO      ?= go
@@ -25,7 +27,7 @@ FRONTEND_DIST := $(FRONTEND)/dist/index.html
 FRONTEND_SRC  := $(shell find $(FRONTEND)/src -type f -not -name '*.test.*') $(FRONTEND)/index.html \
                  $(FRONTEND)/vite.config.ts $(FRONTEND)/package.json
 
-.PHONY: all windows windows-arm64 dev host-dev frontend notices vet test clean FORCE
+.PHONY: all windows windows-arm64 dev host-dev frontend notices fp-info vet test clean FORCE
 
 all: windows
 
@@ -92,6 +94,13 @@ test:
 
 notices:
 	$(GO) run ./internal/notices/gen
+
+# Reads the exe as built (it does not rebuild it, so the hash is the one of
+# the file you send); docs/false-positive-submission.md says where it goes.
+EXE ?= dist/windows-amd64/olsyn-drive.exe
+fp-info:
+	@test -f "$(EXE)" || { echo "$(EXE) not found: run make first, or pass EXE=path"; exit 1; }
+	@$(GO) run ./ui/winres -inspect "$(EXE)"
 
 clean:
 	rm -rf dist cmd/olsyn-drive/rsrc_windows_*.syso
