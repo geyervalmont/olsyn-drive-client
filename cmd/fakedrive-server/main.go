@@ -6,6 +6,10 @@
 // holds synthetic data only.
 //
 //	fakedrive-server [--addr 127.0.0.1:8787] [--faults 127.0.0.1:8788] [--auto-approve] [--data DIR]
+//	                 [--release-exe olsyn-drive.exe [--release-version 1.0.0-dev] [--install-scripts scripts/install]]
+//
+// With --release-exe it also serves a signed release of that exe and the
+// install scripts (release.go), to try the scripts by hand.
 //
 // Fault controls, on the --faults address:
 //
@@ -53,6 +57,9 @@ type config struct {
 	checksums          string
 	bigFolder          int
 	virtualSize        int64
+	releaseExe         string
+	releaseVersion     string
+	installScripts     string
 }
 
 func parse(args []string, stderr io.Writer) (config, error) {
@@ -66,6 +73,9 @@ func parse(args []string, stderr io.Writer) (config, error) {
 	fs.StringVar(&c.checksums, "checksums", "verify", "large uploads: verify (claimed, verified 5 s later), never (stay claimed), none (a drive without checksum states)")
 	fs.IntVar(&c.bigFolder, "big-folder", 12000, "how many files the large folder holds")
 	gib := fs.Float64("virtual-gib", 5, "size of the generated large file, in GiB")
+	fs.StringVar(&c.releaseExe, "release-exe", "", "serve this exe as the stable release's Windows installer (signed with a key made at start)")
+	fs.StringVar(&c.releaseVersion, "release-version", "1.0.0-dev", "version of the served release")
+	fs.StringVar(&c.installScripts, "install-scripts", "", "folder with install.ps1 and install.cmd, served at /install.ps1 and /install.cmd with this server's address filled in")
 	if err := fs.Parse(args); err != nil {
 		return c, err
 	}
@@ -133,6 +143,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	tree := seed(fd, c.bigFolder, c.virtualSize)
 	log.Info("seeded", "folders", tree.folders, "files", tree.files, "took", time.Since(start).Round(time.Millisecond))
 
+	var rel *devRelease
+	if c.releaseExe != "" {
+		if rel, err = newDevRelease(fd, c.releaseExe, c.releaseVersion, c.installScripts); err != nil {
+			return err
+		}
+	}
+
 	srv := &http.Server{Handler: faults(fd, log), ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = srv.Serve(fl) }()
 	defer srv.Close()
@@ -144,6 +161,15 @@ Point a dev build of the client at it:
   olsyn-drive agent --server %s
 Ctrl+C stops it.
 `, fd.URL(), c.faults, approveHint(c.autoApprove), fd.URL())
+	if rel != nil {
+		fmt.Fprintf(stdout, `Release %s (stable) of %s, signed with key %q.
+Install it (in a normal PowerShell window):
+  irm %s/install.ps1 | iex
+A dev build has no release keys; to have it check this manifest's signature, set first:
+  $env:OLSYN_DRIVE_DEV_RELEASE_KEYS = "%s=%s"
+or let it install unchecked: & ([scriptblock]::Create((irm %s/install.ps1))) -AllowUnverified
+`, c.releaseVersion, c.releaseExe, rel.keyID, fd.URL(), rel.keyID, rel.publicKey, fd.URL())
+	}
 	<-ctx.Done()
 	log.Info("stopping")
 	return nil

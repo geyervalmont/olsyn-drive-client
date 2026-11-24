@@ -27,14 +27,23 @@ func cmdInstall(e *env, args []string) int {
 	user := fs.Bool("user", false, "install for the current user (the only mode)")
 	noAutostart := fs.Bool("no-autostart", false, "do not start the agent at login")
 	noStart := fs.Bool("no-start", false, "do not start the agent now")
+	quiet := fs.Bool("quiet", false, "no dialog and no window: the installed app starts with only its tray icon")
+	manifest := fs.String("manifest", "", "the release answer the install script downloaded: install only if it is signed with a key built into this program and names this file as the installer")
+	allowUnverified := fs.Bool("allow-unverified", false, "with --manifest: install even though this build has no release keys (development builds)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
 	if !*user {
-		e.errorf("usage: olsyn-drive install --user\n")
+		e.errorf("usage: olsyn-drive install --user [--quiet] [--manifest <file>]\n")
 		return exitUsage
 	}
-	res, err := installSelf(e, installOptions{Autostart: !*noAutostart, Start: !*noStart})
+	if *manifest != "" {
+		if err := checkInstallManifest(e, *manifest, *allowUnverified); err != nil {
+			e.errorf("olsyn-drive: %v\n", err)
+			return exitError
+		}
+	}
+	res, err := installSelf(e, installOptions{Autostart: !*noAutostart, Start: !*noStart, Quiet: *quiet})
 	if err != nil {
 		return e.report(err)
 	}
@@ -49,6 +58,7 @@ func cmdInstall(e *env, args []string) int {
 type installOptions struct {
 	Autostart bool // start at login
 	Start     bool // start the installed copy now
+	Quiet     bool // no window: the app starts in the tray only
 }
 
 type installResult struct {
@@ -128,6 +138,9 @@ func installSelf(e *env, o installOptions) (installResult, error) {
 		now := []string{"agent"}
 		if hasUI {
 			now = nil // the app opens (on its first-run screen) and starts the agent
+			if o.Quiet {
+				now = []string{"ui", "--background"} // tray only; the app starts the agent
+			}
 		}
 		if _, err := platform.StartDetached(target, now); err != nil {
 			return res, err

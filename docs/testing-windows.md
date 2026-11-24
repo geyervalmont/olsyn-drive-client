@@ -198,3 +198,31 @@ start olsyn-drive://open/transfers/held
 
 Signed out, the window shows the setup steps instead of any screen: that is deliberate (the window always shows what
 the agent says).
+
+## Install scripts (manual, against the fake drive)
+
+Build with `make dev`, copy `dist/windows-amd64/dev/` and `scripts/install/` to the test PC, then in one window:
+
+```
+fakedrive-server.exe --release-exe olsyn-drive.exe --release-version 1.0.0-dev --install-scripts scripts\install
+```
+
+It serves a stable release of that exe (both windows-x64 and windows-arm64, signed with a key it makes at start), the
+artifact behind a 302 to storage as the drive does, and `/install.ps1` and `/install.cmd` with its own address filled
+in; it prints the commands below with that address and key.
+
+1. In a normal PowerShell 5.1 window: `$env:OLSYN_DRIVE_DEV_RELEASE_KEYS = "dev=<key it printed>"`, then
+   `irm http://127.0.0.1:8787/install.ps1 | iex`. Expect: "Looking for the latest", the download line, "Checked: size
+   and SHA-256 match", "Note: this build is not signed", "Release manifest verified", "installed", the app opens
+   on its Welcome screen. `$LASTEXITCODE` is 0 and the window stays open. No folder `olsyn-drive-install-*` is left in
+   `%TEMP%`.
+2. Run it again: "already installed" (exit 0), or with `-Force` a reinstall that stops and restarts the running copy.
+3. Without the key variable (new window): the installer refuses ("has no release keys … --allow-unverified"), exit 1.
+   With `& ([scriptblock]::Create((irm http://127.0.0.1:8787/install.ps1))) -AllowUnverified` it warns and installs.
+4. A wrong key (`$env:OLSYN_DRIVE_DEV_RELEASE_KEYS = "dev=<another key>"`): refused, signature not valid, exit 1.
+5. Change the exe on disk after starting the server: "does not match the SHA-256", exit 1, nothing installed.
+6. Repeat 1 in PowerShell 7 (`pwsh`), and with `install.cmd` downloaded from `http://127.0.0.1:8787/install.cmd`
+   (from cmd.exe; `echo %ERRORLEVEL%` is 0).
+7. From an administrator PowerShell window: refused, exit 1, with the reason.
+8. `powershell -File scripts\install\install.ps1 -Server http://127.0.0.1:9` (nothing listening): "could not read …",
+   exit 1.

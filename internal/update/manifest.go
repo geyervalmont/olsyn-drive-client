@@ -29,6 +29,7 @@ var (
 	ErrHashMismatch = errors.New("downloaded SHA-256 does not match the manifest")
 	ErrRolledBack   = errors.New("new version failed its health check and was rolled back")
 	ErrNoKeys       = errors.New("no release keys are built into this client")
+	ErrNotInstaller = errors.New("this file is not the release's installer for this platform")
 )
 
 // Envelope is what GET /api/client/v1/releases/{channel}.json returns.
@@ -153,6 +154,50 @@ func (m Manifest) validate(channel string) error {
 		}
 	}
 	return nil
+}
+
+// InstallerArtifact returns the artifact with role "installer" for platform.
+func (m Manifest) InstallerArtifact(platform string) (Artifact, error) {
+	for _, a := range m.Artifacts {
+		if a.Platform == platform && a.Role == "installer" {
+			return a, nil
+		}
+	}
+	return Artifact{}, fmt.Errorf("%s installer: %w", platform, ErrNoArtifact)
+}
+
+// VerifyInstaller is the installer's own check of what the install script
+// downloaded. envelopeJSON is the release answer exactly as the drive served
+// it (GET /api/client/v1/releases/{channel}.json, which the script cannot
+// verify: Windows PowerShell 5.1 has no Ed25519). It verifies the signature
+// with keys, then requires that file (this installer) is the release's
+// installer artifact for platform, by size and SHA-256. So a script that was
+// given a forged manifest, or a file other than the one the signed manifest
+// names, is refused here.
+func VerifyInstaller(envelopeJSON []byte, keys Keys, platform, file string) (Manifest, Artifact, error) {
+	var env Envelope
+	if err := json.Unmarshal(envelopeJSON, &env); err != nil {
+		return Manifest{}, Artifact{}, fmt.Errorf("read the release answer: %v: %w", err, ErrInvalid)
+	}
+	m, err := Verify(env, keys, env.Channel)
+	if err != nil {
+		return Manifest{}, Artifact{}, err
+	}
+	a, err := m.InstallerArtifact(platform)
+	if err != nil {
+		return m, Artifact{}, err
+	}
+	size, sum, err := fileDigest(file)
+	if err != nil {
+		return m, a, err
+	}
+	if size != a.Size {
+		return m, a, fmt.Errorf("%w: %d bytes, the manifest says %d (%w)", ErrNotInstaller, size, a.Size, ErrSizeMismatch)
+	}
+	if sum != a.SHA256 {
+		return m, a, fmt.Errorf("%w (%w)", ErrNotInstaller, ErrHashMismatch)
+	}
+	return m, a, nil
 }
 
 // UpdateArtifact returns the artifact with role "update" for platform.

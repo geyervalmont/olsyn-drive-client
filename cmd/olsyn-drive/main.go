@@ -70,7 +70,11 @@ Usage: olsyn-drive <command> [options]
   quit                  stop the agent (it unmounts the drive)
   version               print the version
   licences              print the open-source notices
-  install --user        install for this user (no administrator needed)
+  install --user [--quiet] [--manifest <file> [--allow-unverified]]
+                        install for this user (no administrator needed);
+                        --quiet shows no dialog or window; --manifest refuses
+                        to install unless that release manifest is signed with
+                        a key built into this program and names this file
   uninstall [--keep-cache] [--yes]
                         remove this program and its data (--keep-cache keeps
                         settings, cache and files not yet uploaded)
